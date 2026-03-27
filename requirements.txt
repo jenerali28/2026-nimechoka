@@ -1,0 +1,23 @@
+# ============================================================
+# Video Clone Pipeline — Python Dependencies
+# ============================================================
+# Install with:  uv pip install -r requirements.txt
+# ============================================================
+
+# --- HTTP requests (used by most pipeline scripts) ---
+requests>=2.31.0
+
+# --- YAML parsing (analysis, prompts, configs) ---
+pyyaml>=6.0.1
+
+# --- OpenAI Whisper (local speech-to-text for Step 1) ---
+openai-whisper>=20240930
+
+# --- Whisper dependencies (torch + numpy) ---
+torch>=2.0.0
+numpy>=1.24.0
+
+# --- FFmpeg wrapper (optional, but useful for validation) ---
+# Note: FFmpeg itself must be installed via system package manager:
+#   sudo apt install ffmpeg          (Linux/Debian)
+#   brew install ffmpeg              (macOS)

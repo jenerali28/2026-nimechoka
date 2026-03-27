@@ -1,0 +1,77 @@
+{
+    "style_guide": {
+        "language": {
+            "output_language": "Swahili (Kiswahili)",
+            "dialect": "Kiswahili cha Tanzania — cha asili na mazungumzo, kama vile Mtanzania anavyosimulia hadithi",
+            "rule": "Script nzima LAZIMA iandikwe kwa Kiswahili. Usitumie maneno ya Kiingereza isipokuwa majina ya watu au sehemu ambayo hayana mbadala wa Kiswahili."
+        },
+        "target_audience": "Watoto wenye umri wa miaka 5 hadi 10",
+        "voice": "Msimulizi mwenye sauti ya joto, utulivu, na anayesimulia katika nafsi ya tatu",
+        "tone": "Mpole, mwenye unyenyekevu, na wa dhati — usio na makeke au uigizaji wa kupita kiasi",
+        "sentence_structure": "Sentensi fupi na rahisi tu. Kamwe usitumie lugha ngumu au ya kitaaluma.",
+        "audience_address": {
+            "enabled": true,
+            "example_phrases": [
+                "na unajua",
+                "unajua nini kilitokea?",
+                "si ndio marafiki zangu?",
+                "na unajua marafiki",
+                "kama tunavyoona siku hizi katika familia nyingi"
+            ],
+            "frequency": "Mara chache — mara 2 hadi 3 kwa kila script"
+        },
+        "opening": {
+            "rule": "Ingia moja kwa moja kwenye hadithi. Hakuna salamu, hakuna utangulizi, hakuna kutangaza chaneli.",
+            "good_example": "Baada ya kufukuzwa katika Bustani ya Edeni, Adamu na Hawa walianza maisha yao magumu hapa duniani.",
+            "bad_example": "Karibuni tena! Leo tutaenda kujifunza kuhusu hadithi ya Kaini na Abeli!"
+        },
+        "closing": {
+            "rule": "Malizia kwa funzo fupi la kimaadili la sentensi 2 hadi 3 rahisi zinazoelekezwa moja kwa moja kwa hadishi. Hakuna kusema 'subscribe', hakuna kuaga.",
+            "good_example": "Sisi sote ni watoto wa Mwenyezi Mungu mkuu. Ikiwa ni hivyo, si tunapaswa kuwajali kidogo ndugu zetu pia?",
+            "bad_example": "Hadithi nzuri sana! Usisahau kulike na kusubscribe kwa hadithi zaidi za Biblia!"
+        },
+        "dialogue": {
+            "style": "Wazi na wa moja kwa moja. Maongezi mafupi na yenye nguvu. Ya dhati, si ya kuigiza.",
+            "good_example_prayer": "Yahweh Mola wangu, tafadhali pokea sadaka yangu hii ndogo. Asante sana Bwana kwa kunibariki kwa makundi ya wanyama wenye afya niliyo nao.",
+            "good_example_conversation": "Sijui. Mimi nijuaje? Kwani mimi ni mlinzi wa ndugu yangu?",
+            "bad_example": "Ee Bwana mwenyezi, ninasujudu kwa unyenyekevu mbele ya utukufu wako mkuu na usio na mipaka ninapowasilisha ishara hii ya kujitolea kwangu kwa dhati."
+        },
+        "narration": {
+            "style": "Maelezo ya wazi ya matukio na hisia. Hakuna mafumbo, hakuna lugha ya picha, hakuna maneno ya maua-maua.",
+            "good_example_action": "Kaini alileta kikapu kilichojaa mboga na matunda kwa Mungu.",
+            "bad_example_action": "Kaini alikaribia madhabahu akiwa na mazao ya mavuno yaliyochaguliwa kwa uangalifu, moyo wake ukiwa mzito kwa ushindani usiozungumzwa.",
+            "good_example_emotion": "Hii ilimfanya Kaini akasirike sana na kuhuzunika.",
+            "bad_example_emotion": "Moyo wa Kaini uliungua kwa wivu ambao hakuweza kuuzuia."
+        },
+        "forbidden_phrases": [
+            "Inastaajabisha!",
+            "Haijawahi kutokea!",
+            "Twende tukaone!",
+            "Usiondoke!",
+            "Karibuni tena!",
+            "Usisahau kulike na kusubscribe",
+            "Katika video ya leo",
+            "Tutaenda kujifunza",
+            "Hadithi ya leo inahusu"
+        ],
+        "forbidden_patterns": [
+            "Kutoa mawaidha katikati ya hadithi — weka tafakari zote mwishoni tu",
+            "Lugha ya mashairi au yenye mahadhi ya kuimba",
+            "Lugha ya mtaani au lugha ya mtandaoni",
+            "Kuelezea hadithi au maana yake kupita kiasi",
+            "Vichwa vya habari vya sura, sehemu, au nambari",
+            "Lebo za majina ya wahusika kama KAINI: au MSIMULIZI:",
+            "Mazungumzo ya tamthilia au yaliyojaa hisia za kupita kiasi",
+            "Alama zozote za uumbaji, alama za kurekebisha maandishi, au maelekezo ya matukio"
+        ],
+        "format": {
+            "output_type": "Maandishi ya kawaida yanayoendelea — hakuna vichwa vya habari, hakuna lebo, hakuna alama, hakuna mistari iliyoachwa kati ya sehemu",
+            "tts_ready": true,
+            "reason": "Script inatumwa moja kwa moja kwenye mtambo wa kubadilisha maandishi kuwa sauti (TTS)"
+        },
+        "length": {
+            "target_words": "900 mpaka 1600",
+            "target_duration_minutes": "8 mpaka 15"
+        }
+    }
+}

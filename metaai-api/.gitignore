@@ -1,0 +1,115 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyc
+
+# =========================
+# Packaging
+# =========================
+build/
+dist/
+eggs/
+.eggs/
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.local
+.pypirc
+
+# =========================
+# Virtualenvs
+# =========================
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# TEMP / DEBUG FILES
+# =========================
+response_*.json
+response_*.txt
+debug_responses/
+html_content.html
+source.html
+dev_tests/
+
+# Debug test files (temporary/experimental)
+debug_*.py
+try_*.py
+quick_*.py
+analyze_*.py
+enable_*.py
+final_*.py
+
+# Specific temporary test files
+test_video_debug.py
+test_video_direct.py
+test_video_fixed.py
+test_orientation_quick.py
+test_image_quick.py
+debug_async_video_test.py
+test_current_flow.py
+test_simple_approach.py
+test_render_fix.py
+test_success.py
+
+# =========================
+# Node modules
+# =========================
+node_modules/
+package-lock.json
+
+# =========================
+# Temporary documentation
+# =========================
+*_FIX.md
+*_SUMMARY.md
+*_REPORT.md
+*_RESULTS.md
+*_BREAKTHROUGH.md
+FIXES_APPLIED.md
+API_FIXES_REPORT.md
+TEST_UPDATES.md
+FINAL_RESULTS.md
+VIDEO_BREAKTHROUGH.md
+IMPLEMENTATION_SUMMARY.md
+
+# =========================
+# Archive folder (old tests, debug files, etc.)
+# =========================
+archive/
+DEPLOYMENT_FIX.md
+GITHUB_ISSUE_RESPONSE.md
+QUICK_FIX_GUIDE.md
+
+# Don't include cloudflare-worker files
+cloudflare-worker
+# network.json
+# network-*.json
+test_api.html

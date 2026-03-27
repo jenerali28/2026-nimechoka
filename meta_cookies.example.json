@@ -1,0 +1,14 @@
+[
+    {
+        "label": "account_1",
+        "datr": "YOUR_DATR_COOKIE_HERE",
+        "abra_sess": "YOUR_ABRA_SESS_COOKIE_HERE",
+        "ecto_1_sess": "YOUR_ECTO_1_SESS_COOKIE_HERE"
+    },
+    {
+        "label": "account_2",
+        "datr": "YOUR_DATR_COOKIE_HERE",
+        "abra_sess": "YOUR_ABRA_SESS_COOKIE_HERE",
+        "ecto_1_sess": "YOUR_ECTO_1_SESS_COOKIE_HERE"
+    }
+]

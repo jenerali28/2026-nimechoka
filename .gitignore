@@ -1,0 +1,91 @@
+# Environments
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets and Sensitive Data
+.env
+.env.*
+.auth
+*.json
+*.txt
+*.log
+!requirements.txt
+!pyproject.toml
+!package.json
+!tsconfig.json
+!uv.lock
+!bun.lock
+!bun.lockb
+!meta_cookies.example.json
+!bible/used_topics.json
+!style_guide.json
+!AIStudio2API/pyproject.toml
+!AIStudio2API/uv.lock
+!grok2api/pyproject.toml
+!grok2api/uv.lock
+!Gemini-API-New/pyproject.toml
+
+# Media Files (Strict)
+input_videos/
+outputs/
+final_bibles/
+final_clones/
+tmp/
+backups/
+*.mp4
+*.mp3
+*.wav
+*.mov
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.otf
+*.ttf
+
+# Logs and Intermediate Files
+*.log
+logs/
+pipeline_resume*.log
+test_*.log
+__pycache__/
+build/
+dist/
+*.egg-info/
+
+# Excluded Directories
+AIStudio2API\ new/
+AIStudio2API\ new\ /
+Gemini-API-New.bak/
+
+# Re-include necessary code files in sub-directories
+!**/*.py
+!**/*.sh
+!**/*.js
+!**/*.ts
+!**/*.md
+!**/*.toml
+!**/*.yaml
+!**/*.yml
+!**/*.html
+!**/*.css
+!**/*.sql
+!**/Dockerfile
+!**/docker-compose.yml
+
+# Specific exclusions for nested tools if they have media/logs
+**/logs/
+**/data/auth_profiles/
+**/data/workers.json
+**/data/gui_config.json
+**/data/token.json
+**/data/key.txt
