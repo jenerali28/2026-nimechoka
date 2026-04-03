@@ -809,18 +809,22 @@ class GenerationAPI:
                 parts = text.split("\r\n\r\n")
                 for part in parts:
                     part = part.strip()
-                    if part.startswith("{") and part.endswith("}"):
+                    if "{" in part and "}" in part:
                         try:
-                            data = json.loads(part)
-                            if data:
-                                self.logger.debug("Fetch media response parsed from multipart")
+                            # Try to find the start of JSON in the part
+                            start_idx = part.find("{")
+                            end_idx = part.rfind("}") + 1
+                            json_str = part[start_idx:end_idx]
+                            data = json.loads(json_str)
+                            if data and isinstance(data, dict):
+                                self.logger.debug("Fetch media response parsed from multipart chunk")
                                 return data
                         except json.JSONDecodeError:
                             continue
 
                 self.logger.error(f"Failed to parse media response as JSON or multipart. Raw: {text[:200]}")
                 return {
-                    "error": "JSON decode failed and no JSON part found",
+                    "error": "JSON decode failed and no valid JSON part found",
                     "response_text": text[:500],
                     "status_code": response.status_code
                 }
@@ -862,13 +866,6 @@ class GenerationAPI:
                 # Use the first video ID to fetch media (response includes all recent media)
                 data = self.fetch_media_by_id(video_ids[0], conversation_id=conversation_id)
                 
-                if not isinstance(data, dict):
-                    self.logger.warning(f"Attempt {attempt}/{max_attempts}: media response is not a dict: {type(data)}")
-                    if attempt < max_attempts:
-                        adaptive_wait = 3 if attempt <= 10 else wait_seconds
-                        time.sleep(adaptive_wait)
-                    continue
-
                 if 'error' in data:
                     self.logger.warning(f"Attempt {attempt}/{max_attempts}: {data['error']}")
                     if attempt < max_attempts:

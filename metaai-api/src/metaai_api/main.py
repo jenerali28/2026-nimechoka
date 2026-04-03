@@ -1216,38 +1216,42 @@ class MetaAI:
 
         Returns:
             Dictionary with success status, conversation_id, prompt, video_urls, and timestamp
-        """
-        try:
-            # Use generation_api directly for better reliability
-            result = self.generation_api.generate_video(
-                prompt=prompt,
-                fetch_urls=True,
-                media_ids=media_ids,
-                attachment_metadata=attachment_metadata,
-                orientation=orientation,
-                max_attempts=max_attempts,
-                wait_seconds=wait_seconds
+
+        Example:
+            ai = MetaAI(cookies={"datr": "...", "abra_sess": "..."})
+            result = ai.generate_video(
+                "Generate a video of a sunset",
+                media_ids=["1234567890"],
+                attachment_metadata={'file_size': 3310, 'mime_type': 'image/jpeg'}
             )
-            
-            video_urls = [v.get('url') for v in result.get('videos', []) if v.get('url')]
-            
-            return {
-                "success": len(video_urls) > 0,
-                "conversation_id": result.get("conversation_id"),
-                "media_ids": [v.get('id') for v in result.get('videos', [])],
-                "prompt": prompt,
-                "video_urls": video_urls,
-                "timestamp": time.time(),
-                "error": result.get("error") if not video_urls else None
-            }
-        except Exception as e:
-            logging.error(f"Error in generate_video: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "prompt": prompt,
-                "timestamp": time.time()
-            }
+            if result["success"]:
+                print(f"Video URLs: {result['video_urls']}")
+        """
+        from metaai_api.video_generation import VideoGenerator
+        
+        # Convert cookies dict to string format if needed
+        if isinstance(self.cookies, dict):
+            cookies_str = "; ".join([f"{k}={v}" for k, v in self.cookies.items() if v])
+        else:
+            cookies_str = str(self.cookies)
+        
+        # Use VideoGenerator for video generation
+        video_gen = VideoGenerator(cookies_str=cookies_str)
+        
+        # Try to use existing conversation if we have one
+        conv_id = self.external_conversation_id if hasattr(self, 'external_conversation_id') else None
+        
+        return video_gen.generate_video(
+            prompt=prompt,
+            media_ids=media_ids,
+            attachment_metadata=attachment_metadata,
+            orientation=orientation,
+            conversation_id=conv_id,
+            wait_before_poll=wait_before_poll,
+            max_attempts=max_attempts,
+            wait_seconds=wait_seconds,
+            verbose=verbose
+        )
 
     def upload_image(self, file_path: str) -> Dict[str, Any]:
         """

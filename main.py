@@ -373,21 +373,12 @@ def pipeline(
     # For now, just do analysis. We'll generate prompts after TTS.
 
     # ======================================================================
-    # Step 3: Extract Keyframes from Original Video
+    # Step 3: Extract Reference Keyframes (SKIPPED in text-to-video mode)
     # ======================================================================
-    step += 1
-    print("\n" + "=" * 60)
-    print(f"  [{step}/{total_steps}] Extract Reference Keyframes")
-    print("=" * 60)
-
-    ok = run_step("Extract Keyframes", [
-        python, str(UTILS_DIR / "extract_keyframes.py"),
-        str(video_path),
-        str(analysis_file),
-        "-o", str(keyframes_dir),
-    ])
-    if not ok:
-        print("  \u26a0 Keyframe extraction failed (non-fatal, continuing without reference frames)")
+    # step += 1
+    # print("\n" + "=" * 60)
+    # print(f"  [{step}/{total_steps}] Extract Reference Keyframes")
+    # ...
 
     # ======================================================================
     # Step 4: Rewrite script to Spanish
@@ -465,34 +456,19 @@ def pipeline(
         return False
 
     # ======================================================================
-    # Step 6: Generate scene images (AIStudio2API Nano Banana / Gemini 2.5 Flash)
+    # Step 6: Generate scene images (SKIPPED in text-to-video mode)
+    # ======================================================================
+    # step += 1
+    # print("\n" + "=" * 60)
+    # print(f"  [{step}/{total_steps}] Generate Scene Images")
+    # ...
+
+    # ======================================================================
+    # Step 7: Generate video clips (Meta AI — Text-to-Video)
     # ======================================================================
     step += 1
     print("\n" + "=" * 60)
-    print(f"  [{step}/{total_steps}] Generate Scene Images (Nano Banana / Gemini 2.5 Flash)")
-    print("=" * 60)
-
-    gen_images_cmd = [
-        python, str(UTILS_DIR / "generate_images.py"),
-        str(prompts_file),
-        "-o", str(images_dir),
-        "--api-base", api_base,
-        "--model", "gemini-2.5-flash-image",
-        "--aspect-ratio", "16:9",
-    ]
-    if keyframes_dir.exists() and any(keyframes_dir.iterdir()):
-        gen_images_cmd.extend(["--keyframes-dir", str(keyframes_dir)])
-
-    ok = run_step("Generate Images", gen_images_cmd)
-    if not ok:
-        print("  Warning: Image generation had issues, continuing with available images")
-
-    # ======================================================================
-    # Step 7: Generate video clips (Meta AI — image-to-video with cookie rotation)
-    # ======================================================================
-    step += 1
-    print("\n" + "=" * 60)
-    print(f"  [{step}/{total_steps}] Generate Video Clips (Meta AI — Image-to-Video)")
+    print(f"  [{step}/{total_steps}] Generate Video Clips (Meta AI — Text-to-Video)")
     print("=" * 60)
 
     gen_videos_cmd = [
@@ -504,10 +480,9 @@ def pipeline(
     ]
     if analysis_file.exists():
         gen_videos_cmd.extend(["--analysis-file", str(analysis_file)])
-    # Pass images for image-to-video
-    if images_dir.exists() and any(images_dir.iterdir()):
-        gen_videos_cmd.extend(["--images-dir", str(images_dir)])
-
+    
+    # We NO LONGER pass --images-dir here
+    
     ok = run_step("Generate Videos", gen_videos_cmd)
     if not ok:
         print("  Video generation failed.")

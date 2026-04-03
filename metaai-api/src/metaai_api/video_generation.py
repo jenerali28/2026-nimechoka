@@ -783,11 +783,6 @@ Content-Disposition: form-data; name="doc_id"\r
         try:
             # Parse the response
             data = json.loads(response_text)
-            if not isinstance(data, dict):
-                if log_details:
-                    logger.debug(f"[VIDEO URL EXTRACTION] Response is not a JSON object: {type(data)}")
-                return []
-
             if log_details:
                 logger.debug("[VIDEO URL EXTRACTION] Successfully parsed response as JSON")
             

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Image Generator — Batch Image Generation via Whisk API (Imagen 3.5).
+Image Generator — Batch Image Generation via ImageFX API (Imagen 4).
 
 Takes a prompts file (YAML) and generates one image per scene using
-Google's Imagen 3.5 through the whisk-api CLI.
+Google's ImageFX through the imageFX-api CLI.
 
 Usage:
     python generate_images.py prompts.yaml -o outputs/images/
@@ -25,20 +25,23 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-WHISK_CLI = PROJECT_ROOT / "whisk-api" / "dist" / "Cli.js"
+IMAGEFX_CLI = PROJECT_ROOT / "imageFX-api" / "dist" / "cli.js"
 
 DEFAULT_OUTPUT_DIR = Path("outputs/images")
 DEFAULT_ASPECT_RATIO = "LANDSCAPE"  # SQUARE, PORTRAIT, LANDSCAPE
 MAX_RETRIES = 3
 
-# Map common aspect ratios to whisk format
+# Map common aspect ratios to imageFX format
 ASPECT_MAP = {
-    "16:9": "LANDSCAPE",
-    "9:16": "PORTRAIT",
-    "1:1": "SQUARE",
-    "landscape": "LANDSCAPE",
-    "portrait": "PORTRAIT",
-    "square": "SQUARE",
+    "16:9": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+    "9:16": "IMAGE_ASPECT_RATIO_PORTRAIT",
+    "1:1": "IMAGE_ASPECT_RATIO_SQUARE",
+    "landscape": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+    "portrait": "IMAGE_ASPECT_RATIO_PORTRAIT",
+    "square": "IMAGE_ASPECT_RATIO_SQUARE",
+    "LANDSCAPE": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+    "PORTRAIT": "IMAGE_ASPECT_RATIO_PORTRAIT",
+    "SQUARE": "IMAGE_ASPECT_RATIO_SQUARE",
 }
 
 # ---------------------------------------------------------------------------
@@ -55,31 +58,33 @@ def load_prompts(path: Path) -> dict:
 
 
 def resolve_aspect(aspect_str: str) -> str:
-    """Convert aspect ratio string to whisk format."""
-    return ASPECT_MAP.get(aspect_str.lower(), aspect_str.upper())
+    """Convert aspect ratio string to imageFX format."""
+    return ASPECT_MAP.get(aspect_str, "IMAGE_ASPECT_RATIO_LANDSCAPE")
 
 
-def generate_image_whisk(
+def generate_image_fx(
     prompt: str,
     cookie: str,
     output_dir: Path,
-    aspect: str = "LANDSCAPE",
+    aspect: str = "IMAGE_ASPECT_RATIO_LANDSCAPE",
+    model: str = "IMAGEN_4",
     timeout: int = 120,
 ) -> tuple:
-    """Generate image using whisk-api CLI.
+    """Generate image using imageFX-api CLI.
 
     Returns (success: bool, output_path: Path | None, error: str | None).
     """
-    if not WHISK_CLI.exists():
-        return False, None, f"whisk-api CLI not found at {WHISK_CLI}"
+    if not IMAGEFX_CLI.exists():
+        return False, None, f"imageFX-api CLI not found at {IMAGEFX_CLI}"
 
     cmd = [
-        "node", str(WHISK_CLI),
-        "generate",
+        "node", str(IMAGEFX_CLI),
         "--prompt", prompt,
-        "--aspect", aspect,
+        "--ratio", aspect,
         "--dir", str(output_dir),
         "--cookie", cookie,
+        "--model", model,
+        "--count", "1"
     ]
 
     try:
@@ -88,7 +93,7 @@ def generate_image_whisk(
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=str(PROJECT_ROOT / "whisk-api"),
+            cwd=str(PROJECT_ROOT / "imageFX-api"),
         )
 
         stdout = result.stdout.strip()
@@ -100,22 +105,13 @@ def generate_image_whisk(
                 return False, None, f"auth_error: {error_msg[:200]}"
             return False, None, error_msg[:300]
 
-        # Parse output to find saved file path
-        # Expected: "[+] Saved to: /path/to/img_xxxxx.png"
-        saved_path = None
-        for line in stdout.splitlines():
-            if "Saved to:" in line:
-                saved_path = line.split("Saved to:")[-1].strip()
-                break
-
-        if saved_path and Path(saved_path).exists():
-            return True, Path(saved_path), None
-        else:
-            # Check if any new image appeared in output_dir
-            images = sorted(output_dir.glob("img_*.*"), key=lambda p: p.stat().st_mtime)
-            if images:
-                return True, images[-1], None
-            return False, None, f"No image file found. stdout: {stdout[:200]}"
+        # ImageFX CLI saves images with random names like image_1740512345678.png
+        # We look for the most recently created image in the output_dir
+        images = sorted(output_dir.glob("image_*.png"), key=lambda p: p.stat().st_mtime)
+        if images:
+            return True, images[-1], None
+        
+        return False, None, f"No image file found. stdout: {stdout[:200]}"
 
     except subprocess.TimeoutExpired:
         return False, None, f"Timeout after {timeout}s"
@@ -129,21 +125,22 @@ def generate_image_whisk(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate images via Whisk API (Imagen 3.5)."
+        description="Generate images via ImageFX API (Imagen 4)."
     )
     parser.add_argument("prompts_file", help="Path to prompts.yaml")
     parser.add_argument("-o", "--output-dir", default=str(DEFAULT_OUTPUT_DIR),
                         help="Output directory")
     parser.add_argument("--cookie", type=str,
-                        default=os.environ.get("WHISK_COOKIE", ""),
-                        help="Google account cookie for Whisk (or set WHISK_COOKIE env)")
+                        default=os.environ.get("IMAGEFX_COOKIE", ""),
+                        help="Google account cookie for ImageFX (or set IMAGEFX_COOKIE env)")
     parser.add_argument("--aspect-ratio", default=DEFAULT_ASPECT_RATIO,
                         help=f"Aspect ratio: LANDSCAPE, PORTRAIT, SQUARE, 16:9, etc. (default: {DEFAULT_ASPECT_RATIO})")
     parser.add_argument("--retries", type=int, default=MAX_RETRIES,
                         help=f"Max retries per scene (default: {MAX_RETRIES})")
+    parser.add_argument("--model", type=str, default="IMAGEN_4", 
+                        help="Model to use (default: IMAGEN_4)")
     # BWC args (ignored silently)
     parser.add_argument("--api-base", type=str, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--model", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--keyframes-dir", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--style-bible", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--character-bible", type=str, default=None, help=argparse.SUPPRESS)
@@ -154,13 +151,16 @@ def main():
     # Cookie is required
     cookie = args.cookie
     if not cookie:
-        # Try loading from a file
-        cookie_file = PROJECT_ROOT / "whisk_cookie.txt"
-        if cookie_file.exists():
-            cookie = cookie_file.read_text().strip()
-        else:
-            print("Error: Cookie is required. Pass --cookie or set WHISK_COOKIE env var.")
-            print("  Or create whisk_cookie.txt in the project root.")
+        # Try loading from imagefx_cookie.txt or whisk_cookie.txt
+        for cf in ["imagefx_cookie.txt", "whisk_cookie.txt"]:
+            cookie_file = PROJECT_ROOT / cf
+            if cookie_file.exists():
+                cookie = cookie_file.read_text().strip()
+                break
+        
+        if not cookie:
+            print("Error: Cookie is required. Pass --cookie or set IMAGEFX_COOKIE env var.")
+            print("  Or create imagefx_cookie.txt in the project root.")
             sys.exit(1)
 
     prompts_path = Path(args.prompts_file)
@@ -174,18 +174,19 @@ def main():
 
     # --- Banner ---
     print("=" * 60)
-    print("  Image Generator — Whisk API (Imagen 3.5)")
+    print("  Image Generator — ImageFX API (Imagen 4)")
     print("=" * 60)
-    print(f"  CLI      : {WHISK_CLI}")
+    print(f"  CLI      : {IMAGEFX_CLI}")
     print(f"  Output   : {output_dir}")
     print(f"  Aspect   : {aspect}")
+    print(f"  Model    : {args.model}")
     print(f"  Scenes   : {len(scenes)}")
     print("-" * 60)
 
     success_count = 0
-    # Temp dir for whisk output (it names files randomly)
-    whisk_tmp = output_dir / "_whisk_tmp"
-    whisk_tmp.mkdir(exist_ok=True)
+    # Temp dir for imageFX output
+    fx_tmp = output_dir / "_imagefx_tmp"
+    fx_tmp.mkdir(exist_ok=True)
 
     for i, scene in enumerate(scenes, 1):
         scene_num = scene.get("scene_number", i)
@@ -202,10 +203,10 @@ def main():
             success_count += 1
             continue
 
-        # Clean prompt (whisk has a char limit)
+        # Clean prompt
         clean_prompt = prompt_text.strip()
-        if len(clean_prompt) > 900:
-            clean_prompt = clean_prompt[:897] + "..."
+        if len(clean_prompt) > 1000:
+            clean_prompt = clean_prompt[:997] + "..."
 
         print(f"[{i}/{len(scenes)}] Scene {scene_num}...")
         print(f"  Prompt: {clean_prompt[:120]}{'...' if len(clean_prompt) > 120 else ''}")
@@ -217,11 +218,12 @@ def main():
                 print(f"  [Retry {attempt}/{args.retries}] waiting {wait}s...")
                 time.sleep(wait)
 
-            ok, img_path, error = generate_image_whisk(
+            ok, img_path, error = generate_image_fx(
                 prompt=clean_prompt,
                 cookie=cookie,
-                output_dir=whisk_tmp,
+                output_dir=fx_tmp,
                 aspect=aspect,
+                model=args.model,
             )
 
             if ok and img_path:
@@ -243,7 +245,7 @@ def main():
 
     # Cleanup temp dir
     try:
-        shutil.rmtree(whisk_tmp, ignore_errors=True)
+        shutil.rmtree(fx_tmp, ignore_errors=True)
     except Exception:
         pass
 

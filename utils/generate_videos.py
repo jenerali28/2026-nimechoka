@@ -116,7 +116,7 @@ def find_scene_image(images_dir: Path, scene_num: int) -> Optional[Path]:
 
 
 def get_metaai_instance():
-    """Create MetaAI instance with cookies from .env file.
+    """Create MetaAI instance with cookies from .env file or meta_cookies.json.
 
     The SDK loads from metaai-api/.env automatically via dotenv.
     We also support passing cookies from meta_cookies.json.
@@ -133,19 +133,19 @@ def get_metaai_instance():
     cookies_file = PROJECT_ROOT / "meta_cookies.json"
     if cookies_file.exists():
         try:
-            cookie_list = json.loads(cookies_file.read_text())
-            if isinstance(cookie_list, list) and len(cookie_list) > 0:
-                c = cookie_list[0]
+            data = json.loads(cookies_file.read_text())
+            # Handle both list of dicts (for rotation) and single dict
+            c = data[0] if isinstance(data, list) and data else data
+            
+            if isinstance(c, dict):
+                # Required core cookies for MetaAI (Restricted to requested ones)
                 cookies = {
                     "datr": c.get("datr", ""),
                     "abra_sess": c.get("abra_sess", ""),
                     "ecto_1_sess": c.get("ecto_1_sess", ""),
                 }
-                # Add optional cookies
-                for k in ("ps_l", "ps_n", "dpr", "wd", "rd_challenge"):
-                    if c.get(k):
-                        cookies[k] = c[k]
-                print(f"  Loaded cookies from {cookies_file.name}")
+                # Other cookies (wd, dpr, ps_l, ps_n, rd_challenge) are ignored to stick to 'required only'
+                print(f"  Loaded required cookies from {cookies_file.name}")
         except Exception as e:
             print(f"  ⚠ Failed to load {cookies_file}: {e}")
 

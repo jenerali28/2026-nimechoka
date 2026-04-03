@@ -192,42 +192,19 @@ def process_video(video_path):
                     assets={"analysis": str(analysis_file), "prompts": str(prompts_file)}):
         return False
 
-    # --- Step 4.5: Extract Keyframes from Original Video ---
-    keyframes_dir = output_dir / "keyframes"
-    if not run_step(video_name, "keyframes", [
-        PYTHON, str(UTILS_DIR / "extract_keyframes.py"),
-        str(video_path), str(analysis_file), "-o", str(keyframes_dir)
-    ], assets={"keyframes_dir": str(keyframes_dir)}):
-        print("  ⚠ Keyframe extraction failed (non-fatal, continuing without reference frames)")
+    # --- Step 4.5: Extract Keyframes from Original Video (SKIPPED in text-to-video mode) ---
+    # keyframes_dir = output_dir / "keyframes"
+    # if not run_step(video_name, "keyframes", [ ...
 
-    # --- Step 4.7: Generate Style & Character Bibles ---
-    style_bible_file = output_dir / "style_bible.yaml"
-    char_bible_file = output_dir / "character_bible.yaml"
-    if not run_step(video_name, "bibles", [
-        PYTHON, str(UTILS_DIR / "style_bible.py"),
-        str(analysis_file), "-o", str(output_dir), "--enhance"
-    ], assets={"style_bible": str(style_bible_file), "character_bible": str(char_bible_file)}):
-        print("  ⚠ Bible generation failed (non-fatal, continuing without consistency bibles)")
+    # --- Step 4.7: Generate Style & Character Bibles (SKIPPED in text-to-video mode) ---
+    # style_bible_file = output_dir / "style_bible.yaml"
+    # char_bible_file = output_dir / "character_bible.yaml"
 
-    # --- Step 5: Images (AIStudio2API Nano Banana / Gemini 2.5 Flash) ---
-    images_dir = output_dir / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    existing_images = list(images_dir.glob("*.png")) + list(images_dir.glob("*.jpg"))
-    
-    if len(existing_images) < max(3, clip_count // 2):
-        gen_images_cmd = [
-            PYTHON, str(UTILS_DIR / "generate_images.py"),
-            str(prompts_file), "-o", str(images_dir),
-            "--model", "gemini-2.5-flash-image",
-            "--aspect-ratio", "16:9",
-        ]
-        if not run_step(video_name, "images", gen_images_cmd,
-                        assets={"images_dir": str(images_dir)}):
-            print("  ⚠ Image generation had issues — continuing with available images")
-    else:
-        print(f"  🖼️  Images (cached): {len(existing_images)} images")
+    # --- Step 5: Images (SKIPPED in text-to-video mode) ---
+    # images_dir = output_dir / "images"
+    # ...
 
-    # --- Step 6: Videos (Meta AI — image-to-video with cookie rotation) ---
+    # --- Step 6: Videos (Meta AI — Text-to-Video) ---
     clips_dir = output_dir / "clips"
     gen_videos_cmd = [
         PYTHON, str(UTILS_DIR / "generate_videos.py"),
@@ -236,9 +213,9 @@ def process_video(video_path):
     ]
     if analysis_file.exists():
         gen_videos_cmd.extend(["--analysis-file", str(analysis_file)])
-    # Pass images directory for image-to-video
-    if images_dir.exists() and any(images_dir.iterdir()):
-        gen_videos_cmd.extend(["--images-dir", str(images_dir)])
+    
+    # We NO LONGER pass --images-dir to ensure pure text-to-video
+    
     if not run_step(video_name, "videos", gen_videos_cmd,
                     assets={"clips_dir": str(clips_dir)}):
         return False
