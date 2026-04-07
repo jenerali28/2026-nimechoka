@@ -25,7 +25,7 @@ asset_proxy_url = ""
 # ==================== 反爬虫验证 ====================
 [security]
 # Cloudflare Clearance Cookie
-cf_clearance = ""
+cf_clearance = "dvO_z5O723fXGZuUqop_J79G2Ylbli6fh_iRH5Vnm3g-1775383998.0404074-1.0.1.1-Y2.e_JF5JWNMmXVE0qtdPpNb3yyXkbIzlHrddPhGDfabE0NXAcyFDwe3fD8T1oxIMvawo1qxyi.4V4NCOgbI8PnqtQ0JxQNK9FCBHhpFFfyK4p2hFmVrl5EFIn1tByoe"
 # curl_cffi 浏览器指纹
 browser = "chrome136"
 # User-Agent 字符串

@@ -149,6 +149,13 @@ VIDEO STYLE CONTEXT:
 - Rendering style: {rendering_style}
 {character_context}
 
+⚠️ CHARACTER CONSISTENCY RULE (CRITICAL):
+Every scene MUST feature the EXACT SAME character(s) described above.
+- Same gender, body type, skin tone, hair, clothing in EVERY scene.
+- Do NOT introduce new characters or change existing ones between scenes.
+- If the character is male, keep them male in ALL scenes. If female, keep female in ALL.
+- Describe the character's appearance explicitly in EVERY prompt so the AI doesn't drift.
+
 SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
 {segments_text}
 
@@ -160,7 +167,7 @@ Structure your prompt EXACTLY like this:
 
 PART 1 — SCENE SETUP (1-2 sentences):
 - Style: "{visual_style}, {style_subcategory}."
-- Subject appearance (clothing, colors, features — be specific and consistent for recurring characters)
+- Subject appearance (clothing, colors, features — be specific and IDENTICAL to other scenes)
 - Environment/setting (background, spatial layout, materials, atmosphere)
 - Lighting and color mood
 
@@ -507,12 +514,15 @@ async def run_multimodal_flow(
             character_context = ""
             recurring_chars = analysis_data.get("recurring_characters", [])
             if recurring_chars:
-                char_lines = ["\nRECURRING CHARACTERS (maintain visual consistency):"]
+                char_lines = ["\nRECURRING CHARACTERS (LOCK — maintain EXACT same appearance in every scene):"]
                 for ch in recurring_chars[:5]:
                     name = ch.get("name", "unknown")
-                    desc = ch.get("visual_description", "")
+                    desc = ch.get("visual_description", "") or ch.get("canonical_description", "")
                     if desc:
                         char_lines.append(f"  - {name}: {desc}")
+                char_lines.append(
+                    "  ⚠ NEVER change gender, body type, skin tone, hair, or clothing between scenes."
+                )
                 character_context = "\n".join(char_lines)
 
             prompt = BATCH_PROMPT.format(
@@ -561,6 +571,7 @@ async def run_multimodal_flow(
             "visual_style": visual_style,
             "style_subcategory": style_subcategory,
             "animation_complexity": animation_complexity,
+            "recurring_characters": analysis_data.get("recurring_characters", []),
             "scenes": all_scenes,
         }
 

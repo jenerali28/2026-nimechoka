@@ -36,6 +36,10 @@ VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"}
 MAX_SLOWDOWN_FACTOR = 2.0
 WHISPER_MODEL = "base"
 
+# Minimum fraction of clips that must be present to proceed with assembly.
+# If fewer than this fraction exist, assembly is aborted to prevent a broken video.
+MIN_CLIP_FRACTION = 0.6
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -240,7 +244,16 @@ def _do_synced(ffmpeg_path, clips, audio_path, output_path, scene_timings, n_sce
     miss = n_scenes - avail
     print(f"  Clips: {avail}/{n_scenes} present, {miss} missing")
 
-    # Redistribute missing clip time to neighbors
+    # Guard: abort if too many clips are missing to prevent a broken video.
+    # bulk_processor.retry_missing_clips() should have filled gaps before we get here.
+    if n_scenes > 0 and avail / n_scenes < MIN_CLIP_FRACTION:
+        print(f"\n  ❌ ASSEMBLY ABORTED: only {avail}/{n_scenes} clips present "
+              f"({avail/n_scenes:.0%} < {MIN_CLIP_FRACTION:.0%} minimum).")
+        print(f"     Missing scenes: {[s['sn'] for s in segs if s['clip'] is None]}")
+        sys.exit(2)
+
+    # Redistribute missing clip time to neighbors — the missing scene's audio
+    # duration is absorbed by the nearest present clip so the audio stays intact.
     changed = True
     while changed:
         changed = False
@@ -422,78 +435,129 @@ def _do_chunk_synced(ffmpeg_path, clips, audio_path, output_path, manifest, temp
     print(f"     Narration:    {narr_dur:.1f}s")
     print(f"     Clip length:  {clip_seconds}s each")
 
+    # Guard: count how many scene numbers from the manifest actually have clips
+    all_scene_nums = set()
+    for chunk in chunks:
+        all_scene_nums.update(chunk.get("scene_numbers", []))
+    present = sum(1 for sn in all_scene_nums if sn in clip_map)
+    total_expected = len(all_scene_nums)
+    if total_expected > 0 and present / total_expected < MIN_CLIP_FRACTION:
+        missing_sns = sorted(sn for sn in all_scene_nums if sn not in clip_map)
+        print(f"\n  ❌ ASSEMBLY ABORTED: only {present}/{total_expected} clips present "
+              f"({present/total_expected:.0%} < {MIN_CLIP_FRACTION:.0%} minimum).")
+        print(f"     Missing scenes: {missing_sns}")
+        sys.exit(2)
+    print(f"     Clips present: {present}/{total_expected}")
+
+    # Build a flat ordered list of (scene_number, target_duration, clip_path|None)
+    # one entry per scene number across all chunks.
+    flat = []
+    for chunk in chunks:
+        chunk_dur = chunk["duration"]
+        scene_nums = chunk["scene_numbers"]
+        n = len(scene_nums)
+        per_scene = chunk_dur / max(n, 1)
+        for sn in scene_nums:
+            flat.append({
+                "sn": sn,
+                "dur": per_scene,
+                "clip": clip_map.get(sn),
+                "chunk_idx": chunk["chunk_index"],
+            })
+
+    # Redistribute duration from missing scenes to their nearest present neighbor.
+    # This keeps the total video duration equal to narr_dur so audio never drifts.
+    changed = True
+    while changed:
+        changed = False
+        for i, entry in enumerate(flat):
+            if entry["clip"] is not None:
+                continue
+            dur = entry["dur"]
+            # Prefer previous neighbor, then next
+            if i > 0 and flat[i - 1]["clip"] is not None:
+                flat[i - 1]["dur"] += dur
+                flat.pop(i)
+                changed = True
+                break
+            elif i < len(flat) - 1 and flat[i + 1]["clip"] is not None:
+                flat[i + 1]["dur"] += dur
+                flat.pop(i)
+                changed = True
+                break
+
+    flat = [e for e in flat if e["clip"] is not None]
+    if not flat:
+        print("  ❌ No clips available after redistribution")
+        sys.exit(1)
+
     vf_base = f"scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2"
     norm_clips = []
 
-    for chunk in chunks:
-        chunk_idx = chunk["chunk_index"]
-        chunk_dur = chunk["duration"]
-        scene_nums = chunk["scene_numbers"]
+    print(f"\n  📐 Per-scene timing:")
+    for entry in flat:
+        sn = entry["sn"]
+        clip_path = entry["clip"]
+        target_dur = entry["dur"]
 
-        # Collect available clips for this chunk
-        available = [(sn, clip_map[sn]) for sn in scene_nums if sn in clip_map]
-
-        if not available:
-            # No clips for this chunk — try to stretch neighbors
-            print(f"    Chunk {chunk_idx}: ⚠ No clips for scenes {scene_nums} ({chunk_dur:.1f}s audio)")
-            # We'll let the video be shorter; audio will still play
+        cd = get_duration(ffmpeg_path, clip_path)
+        if cd <= 0:
+            print(f"    Scene {sn:2d}: ⚠ Could not read duration, skipping")
             continue
 
-        # Calculate how much time each available clip should fill
-        n_clips = len(available)
-        target_per_clip = chunk_dur / n_clips
+        stretch = target_dur / cd
+        capped = min(stretch, MAX_SLOWDOWN_FACTOR)
+        actual = cd * capped
+        pct = (1.0 / capped) * 100
 
-        for sn, clip_path in available:
-            cd = get_duration(ffmpeg_path, clip_path)
-            if cd <= 0:
-                continue
+        if capped < stretch:
+            icon, note = "⚠", f"capped {MAX_SLOWDOWN_FACTOR}x, gap {target_dur - actual:.1f}s"
+        elif capped > 1.2:
+            icon, note = "🐢", f"{pct:.0f}% speed"
+        elif capped < 0.8:
+            icon, note = "⚡", f"{pct:.0f}% speed"
+        else:
+            icon, note = "✓", f"{pct:.0f}% speed"
 
-            stretch = target_per_clip / cd
-            capped = min(stretch, MAX_SLOWDOWN_FACTOR)
-            actual = cd * capped
-            pct = (1.0 / capped) * 100
+        print(f"    Scene {sn:2d}: {cd:.1f}s → {actual:.1f}s  {icon} {note}")
 
-            if capped < stretch:
-                icon, note = "⚠", f"capped {MAX_SLOWDOWN_FACTOR}x, gap {target_per_clip-actual:.1f}s"
-            elif capped > 1.2:
-                icon, note = "🐢", f"{pct:.0f}% speed"
-            elif capped < 0.8:
-                icon, note = "⚡", f"{pct:.0f}% speed"
-            else:
-                icon, note = "✓", f"{pct:.0f}% speed"
-
-            print(f"    Chunk {chunk_idx}, Scene {sn:2d}: {cd:.1f}s → {actual:.1f}s  {icon} {note}")
-
-            vf = vf_base if abs(capped - 1.0) < 0.03 else f"setpts={capped}*PTS,{vf_base}"
-            out = temp_dir / f"n_{chunk_idx:03d}_{sn:03d}.mp4"
-            cmd = [ffmpeg_path, "-y", "-i", str(clip_path),
-                   "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
-                   "-an", "-pix_fmt", "yuv420p", "-r", "30",
-                   "-vf", vf, "-t", str(actual), str(out)]
-            r = subprocess.run(cmd, capture_output=True, text=True)
-            if r.returncode == 0:
-                norm_clips.append(out)
-            else:
-                print(f"    ⚠ Encode failed chunk {chunk_idx} scene {sn}")
+        vf = vf_base if abs(capped - 1.0) < 0.03 else f"setpts={capped}*PTS,{vf_base}"
+        out = temp_dir / f"n_{sn:05d}.mp4"
+        cmd = [ffmpeg_path, "-y", "-i", str(clip_path),
+               "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
+               "-an", "-pix_fmt", "yuv420p", "-r", "30",
+               "-vf", vf, "-t", str(actual), str(out)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            norm_clips.append(out)
+        else:
+            print(f"    ⚠ Encode failed scene {sn}: {r.stderr[:120]}")
 
     if not norm_clips:
         print("  ❌ No clips encoded")
         sys.exit(1)
 
-    # Concatenate all normalized clips
+    # Concatenate all normalized clips in scene order
     cat = temp_dir / "list.txt"
-    cat.write_text("\n".join(f"file '{c.resolve()}'" for c in norm_clips))
+    cat.write_text("\n".join(f"file '{c.resolve()}'" for c in norm_clips), encoding="utf-8")
     vis = temp_dir / "visuals.mp4"
     subprocess.run([ffmpeg_path, "-y", "-f", "concat", "-safe", "0",
                     "-i", str(cat), "-c", "copy", str(vis)],
                    check=True, capture_output=True)
 
-    # Merge with audio
+    # Merge with audio — audio is the master clock.
+    # If video is shorter than audio it means clips are still missing despite retries.
+    # Abort hard so the pipeline knows to retry rather than produce a broken video.
     vd = get_duration(ffmpeg_path, vis)
     print(f"\n  [Final] Video: {vd:.1f}s | Narration: {narr_dur:.1f}s")
 
-    # Use the shorter of video/audio as the duration
-    final_dur = min(vd, narr_dur)
+    if vd < narr_dur * 0.95:
+        gap = narr_dur - vd
+        print(f"\n  ❌ ASSEMBLY ABORTED: assembled video ({vd:.1f}s) is {gap:.1f}s shorter than "
+              f"narration ({narr_dur:.1f}s).")
+        print(f"     This means clips are still missing. Re-run to regenerate them.")
+        sys.exit(2)
+
     subprocess.run([ffmpeg_path, "-y",
                     "-i", str(vis), "-i", str(norm_audio),
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",

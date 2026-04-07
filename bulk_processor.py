@@ -105,8 +105,6 @@ def run_step(video_name, step_name, cmd, assets=None, metadata=None):
         update_video_status(video_name, step_name, "failed")
         print(f"  ✗ {step_name} failed for {video_name}")
         return False
-
-# ---------------------------------------------------------------------------
 # Bulk Processing Logic
 # ---------------------------------------------------------------------------
 
@@ -204,36 +202,65 @@ def process_video(video_path):
     # images_dir = output_dir / "images"
     # ...
 
-    # --- Step 6: Videos (Meta AI — Text-to-Video) ---
+    # --- Step 6: Videos (Grok2API — Text-to-Video + Zoom for remainder) ---
+    # generate_videos.py owns all retry logic internally.
+    # Exit code 0 = all clips present, 1 = partial but enough, 2 = too many missing.
     clips_dir = output_dir / "clips"
     gen_videos_cmd = [
         PYTHON, str(UTILS_DIR / "generate_videos.py"),
         str(prompts_file), "-o", str(clips_dir),
-        "--aspect-ratio", "16:9", "--retries", "5"
+        "--grok-api-base", os.environ.get("GROK_API_BASE", "http://localhost:8000"),
+        "--api-key", os.environ.get("GROK_API_KEY", "grok2api"),
+        "--aspect-ratio", "16:9", "--retries", "5",
+        "--video-minutes", "3",
     ]
     if analysis_file.exists():
         gen_videos_cmd.extend(["--analysis-file", str(analysis_file)])
-    
-    # We NO LONGER pass --images-dir to ensure pure text-to-video
-    
-    if not run_step(video_name, "videos", gen_videos_cmd,
-                    assets={"clips_dir": str(clips_dir)}):
+
+    print(f"\n  [RUNNING] videos...")
+    print(f"  Command: {' '.join(gen_videos_cmd)}")
+    video_result = subprocess.run(gen_videos_cmd, capture_output=False)
+
+    if video_result.returncode == 2:
+        # Too many clips missing even after internal retries — do not assemble
+        update_video_status(video_name, "videos", "failed")
+        print(f"  ❌ Video generation: too many clips missing — aborting.")
         return False
+    elif video_result.returncode == 0:
+        update_video_status(video_name, "videos", "completed",
+                            assets={"clips_dir": str(clips_dir)})
+    else:
+        # exit 1 = partial success — enough clips to assemble, mark completed
+        update_video_status(video_name, "videos", "completed",
+                            assets={"clips_dir": str(clips_dir)})
 
     # --- Step 7: Final Assembly (Native Speed — no stretching) ---
     final_video = output_dir / f"{video_stem}_cloned.mp4"
     assembly_cmd = [
         PYTHON, str(UTILS_DIR / "combine_all.py"),
-        "--clips-dir", str(clips_dir), 
-        "--music", str(narration_wav), 
+        "--clips-dir", str(clips_dir),
+        "--music", str(narration_wav),
         "--prompts-file", str(prompts_file),
         "-o", str(final_video)
     ]
     if manifest_file.exists():
         assembly_cmd.extend(["--chunk-manifest", str(manifest_file)])
-        
-    if not run_step(video_name, "assembly", assembly_cmd, assets={"final_video": str(final_video)}):
+
+    # Assembly exit code 2 means clips are still missing — mark videos step as
+    # failed so the next run re-enters the retry loop instead of skipping it.
+    result = subprocess.run(assembly_cmd, capture_output=False)
+    if result.returncode == 2:
+        print(f"  ❌ Assembly aborted due to missing clips — resetting video step for retry.")
+        update_video_status(video_name, "videos", "failed")
+        update_video_status(video_name, "assembly", "failed")
         return False
+    elif result.returncode != 0:
+        update_video_status(video_name, "assembly", "failed")
+        print(f"  ✗ assembly failed for {video_name}")
+        return False
+
+    update_video_status(video_name, "assembly", "completed",
+                        assets={"final_video": str(final_video)})
 
     # --- Step 8: Spanish Captions ---
     captioned_video = output_dir / f"{video_stem}_captioned.mp4"
