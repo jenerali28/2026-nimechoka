@@ -14,7 +14,6 @@ from config import *
 from models import WebSocketConnectionManager
 from logger import initialize_logging, restore_streams
 from browser import _initialize_page_logic, _close_page_logic, load_excluded_models, _handle_initial_model_state_and_storage
-import proxy
 from asyncio import Queue, Lock
 from . import auth_utils
 playwright_manager: Optional[AsyncPlaywright] = None
@@ -70,17 +69,45 @@ def _initialize_proxy_settings():
     else:
         server.logger.info('No proxy configured for Playwright.')
 
+async def _wait_for_port(port: int, timeout: float = 10.0, interval: float = 0.3):
+    import socket
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=1):
+                return True
+        except (ConnectionRefusedError, OSError, socket.timeout):
+            await asyncio.sleep(interval)
+    return False
+
 async def _start_stream_proxy():
+    import proxy
     import server
     STREAM_PORT = os.environ.get('STREAM_PORT')
     if STREAM_PORT != '0':
         port = int(STREAM_PORT or 3120)
         STREAM_PROXY_SERVER_ENV = os.environ.get('UNIFIED_PROXY_CONFIG') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
         server.logger.info(f'Starting STREAM proxy on port {port} with upstream proxy: {STREAM_PROXY_SERVER_ENV}')
-        server.STREAM_QUEUE = multiprocessing.Queue()
-        server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
-        server.STREAM_PROCESS.start()
-        server.logger.info('STREAM proxy process started.')
+        for attempt in range(3):
+            current_port = port + attempt
+            server.STREAM_QUEUE = multiprocessing.Queue()
+            server.STREAM_PROCESS = multiprocessing.Process(target=proxy.start, args=(server.STREAM_QUEUE, current_port, STREAM_PROXY_SERVER_ENV))
+            server.STREAM_PROCESS.start()
+            server.logger.info(f'STREAM proxy process started on port {current_port}. Waiting for port readiness...')
+            if await _wait_for_port(current_port, timeout=30.0):
+                server.STREAM_PORT_ACTUAL = current_port
+                server.logger.info(f'STREAM proxy port {current_port} is ready.')
+                if current_port != port:
+                    server.logger.warning(f'STREAM proxy using fallback port {current_port} (requested {port}).')
+                    if server.PLAYWRIGHT_PROXY_SETTINGS and 'server' in server.PLAYWRIGHT_PROXY_SETTINGS:
+                        server.PLAYWRIGHT_PROXY_SETTINGS['server'] = f'http://127.0.0.1:{current_port}/'
+                        server.logger.info(f'Updated Playwright proxy to actual STREAM port: {current_port}')
+                return
+            else:
+                server.logger.warning(f'STREAM proxy port {current_port} not ready, killing process...')
+                server.STREAM_PROCESS.terminate()
+                server.STREAM_PROCESS.join(timeout=3)
+        server.logger.error(f'STREAM proxy failed to start after 3 attempts.')
 
 async def _initialize_browser_and_page():
     import server
@@ -134,7 +161,7 @@ async def _shutdown_resources():
 async def lifespan(app: FastAPI):
     """FastAPI application life cycle management"""
     import server
-    from server import queue_worker
+    from api import queue_worker
     original_streams = (sys.stdout, sys.stderr)
     initial_stdout, initial_stderr = _setup_logging()
     logger = server.logger
@@ -156,7 +183,12 @@ async def lifespan(app: FastAPI):
         server.is_initializing = False
         yield
     except Exception as e:
-        logger.critical(f'Application startup failed: {e}', exc_info=True)
+        if 'Target page, context or browser has been closed' in str(e):
+            logger.warning(f'Application startup failed (browser closed): {e}')
+        elif 'NS_ERROR_PROXY' in str(e) or 'PROXY_CONNECTION_REFUSED' in str(e):
+            logger.warning(f'Application startup failed (proxy error): {e}')
+        else:
+            logger.critical(f'Application startup failed: {e}', exc_info=True)
         await _shutdown_resources()
         raise RuntimeError(f'Application startup failed: {e}') from e
     finally:

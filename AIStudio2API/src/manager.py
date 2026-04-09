@@ -465,6 +465,8 @@ async def lifespan(app: FastAPI):
     manager._log_enabled = config.get('log_enabled', True)
     if WORKER_POOL_AVAILABLE:
         worker_pool.init_from_config()
+        # Start the health check loop in the background
+        asyncio.create_task(worker_pool.health_check_loop())
     yield
     if manager.process:
         manager.stop_service()

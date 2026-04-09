@@ -49,12 +49,10 @@ async def process_tts_request(
         await controller.fill_multi_speaker_text(contents, check_client_disconnected)
     else:
         await controller.set_tts_mode(False, check_client_disconnected)
-        style = ''
         if speech_config and speech_config.voice_config:
             voice_name = speech_config.voice_config.prebuilt_voice_config.voice_name
-            style = speech_config.voice_config.prebuilt_voice_config.style or ''
             await controller.set_voice(voice_name, 0, check_client_disconnected)
-        await controller.fill_single_speaker_text(contents, style, check_client_disconnected)
+        await controller.fill_single_speaker_text(contents, '', check_client_disconnected)
     
     await controller.run_generation(check_client_disconnected)
     

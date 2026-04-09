@@ -166,9 +166,6 @@ def step_health_check():
     """Check services and cookies."""
     banner("Step 0.5: Health Check")
 
-    # AIStudio2API only needed for audio (TTS)
-    check_service(f"{AISTUDIO_BASE}/health", "AIStudio2API (TTS)")
-
     # Check whisk cookie
     cookie_file = SCRIPT_DIR / "whisk_cookie.txt"
     if cookie_file.exists() and cookie_file.stat().st_size > 50:

@@ -8,6 +8,7 @@ Sends raw text to TTS with no extra prompting for natural default pacing.
 """
 
 import argparse
+import asyncio
 import base64
 import json
 import os
@@ -18,7 +19,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-import requests
+
+import edge_tts
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -26,10 +28,17 @@ import requests
 
 DEFAULT_API_BASE = os.environ.get("API_BASE_URL", "http://localhost:2048")
 DEFAULT_MODEL = "gemini-2.5-flash-preview-tts"
-DEFAULT_VOICE = "Charon"
+DEFAULT_VOICE = "es-ES-AlvaroNeural" # Changed from Charon
 DEFAULT_OUTPUT = "outputs/audio/narration.wav"
 DEFAULT_MAX_CHUNK_CHARS = 1000  # Small enough to avoid TTS timeout (default for Spanish)
 MAX_RETRIES = 3                 # Retry failed chunks
+
+# Voice mapping for edge-tts
+VOICE_MAPPING = {
+    "Charon": "es-ES-AlvaroNeural",
+    "es": "es-ES-AlvaroNeural",
+    "sw": "sw-KE-RafikiNeural"
+}
 
 # No prompt prefix — let TTS use its default natural pacing.
 # Previous pacing instructions were causing the narration to sound slowed down.
@@ -42,8 +51,8 @@ STYLE_INSTRUCTIONS_SW = ""
 
 # Language-specific config (kept for CLI compatibility, but values are empty)
 LANG_CONFIG = {
-    "es": {"pace_prefix": PACE_PREFIX_ES, "style": STYLE_INSTRUCTIONS_ES},
-    "sw": {"pace_prefix": PACE_PREFIX_SW, "style": STYLE_INSTRUCTIONS_SW},
+    "es": {"pace_prefix": PACE_PREFIX_ES, "style": STYLE_INSTRUCTIONS_ES, "voice": "es-ES-AlvaroNeural"},
+    "sw": {"pace_prefix": PACE_PREFIX_SW, "style": STYLE_INSTRUCTIONS_SW, "voice": "sw-KE-RafikiNeural"},
 }
 
 # Runtime state — set from CLI args
@@ -128,43 +137,48 @@ def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHUNK_CHARS) 
     return _merge_units(all_units, max_chars)
 
 
-def generate_speech(text, api_base, model, voice, timeout):
-    """Generate speech for a text chunk using default TTS settings."""
-    url = f"{api_base.rstrip('/')}/generate-speech"
-
-    # Send raw text only — no prompt prefix, no style override
-    payload = {
-        "model": model,
-        "contents": text,
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": voice
-                    }
-                }
-            }
-        }
-    }
-
+async def generate_speech_async(text, voice):
+    """Generate speech for a text chunk using edge-tts."""
+    # Map AIStudio voice name to edge-tts voice if necessary
+    actual_voice = VOICE_MAPPING.get(voice, voice)
+    
     start = time.time()
     try:
-        resp = requests.post(url, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
+        communicate = edge_tts.Communicate(text, actual_voice)
+        audio_bytes = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes += chunk["data"]
+        
+        if not audio_bytes:
+            return None
 
-        # Extract b64
-        audio_b64 = data['candidates'][0]['content']['parts'][0]['inlineData']['data']
+        # Convert MP3 (edge-tts default) to WAV using FFmpeg
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            process = subprocess.Popen(
+                [ffmpeg, "-i", "pipe:0", "-f", "wav", "-ar", "24000", "-ac", "1", "pipe:1"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            wav_bytes, err = process.communicate(input=audio_bytes)
+            if process.returncode == 0:
+                audio_bytes = wav_bytes
+            else:
+                print(f"  ⚠ FFmpeg conversion failed: {err.decode()[:200]}")
+
         elapsed = time.time() - start
-        audio_bytes = base64.b64decode(audio_b64)
-        print(f"    ✓ Generated {len(audio_bytes)/1024:.1f} KB in {elapsed:.1f}s")
+        print(f"    ✓ Generated {len(audio_bytes)/1024:.1f} KB in {elapsed:.1f}s (edge-tts: {actual_voice})")
         return audio_bytes
     except Exception as e:
-        print(f"  ✗ TTS Failed: {e}")
-        if 'resp' in locals() and resp.text:
-            print(f"    Detail: {resp.text[:200]}")
+        print(f"  ✗ edge-tts Failed: {e}")
         return None
+
+
+def generate_speech(text, api_base, model, voice, timeout):
+    """Synchronous wrapper for generate_speech_async."""
+    return asyncio.run(generate_speech_async(text, voice))
 
 
 def _parse_fmt_sample_rate(wav_bytes: bytes) -> int | None:
@@ -304,6 +318,10 @@ def main():
     lang_cfg = LANG_CONFIG.get(args.language, LANG_CONFIG["es"])
     _active_pace_prefix = lang_cfg["pace_prefix"]
     _active_style = lang_cfg["style"]
+    
+    # If voice is default, use language-specific voice
+    if args.voice == DEFAULT_VOICE or args.voice == "Charon":
+        args.voice = lang_cfg.get("voice", args.voice)
 
     max_chunk = args.max_chunk_chars
 

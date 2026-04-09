@@ -18,7 +18,7 @@
 
 项目使用 `key.txt` 文件来管理API密钥：
 
-**文件位置**: 项目根目录下的 `key.txt` 文件
+**文件位置**: `data/key.txt`
 
 **文件格式**: 每行一个API密钥，支持空行和注释
 ```
@@ -34,13 +34,13 @@ another-api-key
 ### 密钥管理方法
 
 #### 手动编辑文件
-直接编辑 `key.txt` 文件添加或删除密钥：
+直接编辑 `data/key.txt` 文件添加或删除密钥：
 ```bash
 # 添加密钥
-echo "your-new-api-key" >> key.txt
+echo "your-new-api-key" >> data/key.txt
 
 # 查看当前密钥（注意安全）
-cat key.txt
+cat data/key.txt
 ```
 
 #### 通过 Web UI 管理
@@ -274,21 +274,6 @@ curl -X POST http://localhost:2048/generate-speech \
 - Nano Banana: `gemini-2.5-flash-image`
 
 **详细文档**: 参见 [媒体生成指南](media-generation-guide.md)
-
-### Ollama 兼容层
-
-项目还提供 Ollama 格式的 API 兼容：
-
-```bash
-# 启动 Ollama 兼容服务
-uv run python app_launcher.py
-# 在 GUI 的配置页面中点击"启动本地LLM模拟服务"
-
-# 使用 Ollama 格式 API
-curl http://localhost:11434/api/tags
-curl -X POST http://localhost:11434/api/chat \
-  -d '{"model": "gemini", "messages": [{"role": "user", "content": "Hello"}]}'
-```
 
 ### 模型列表
 

@@ -22,6 +22,7 @@ Usage (from pipeline):
 """
 
 import argparse
+import asyncio
 import base64
 import json
 import math
@@ -34,7 +35,7 @@ import sys
 import time
 from pathlib import Path
 
-import requests
+import edge_tts
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -42,11 +43,17 @@ import requests
 
 DEFAULT_API_BASE = os.environ.get("API_BASE_URL", "http://localhost:2048")
 DEFAULT_MODEL = "gemini-2.5-flash-preview-tts"
-DEFAULT_VOICE = "Charon"
+DEFAULT_VOICE = "es-ES-AlvaroNeural" # Changed from Charon
 DEFAULT_MAX_CHUNK_CHARS = 1000
 MAX_RETRIES = 3
 CLIP_SECONDS = 6  # Grok text-to-video clip length
 
+# Voice mapping for edge-tts
+VOICE_MAPPING = {
+    "Charon": "es-ES-AlvaroNeural",
+    "es": "es-ES-AlvaroNeural",
+    "sw": "sw-KE-RafikiNeural"
+}
 
 # ---------------------------------------------------------------------------
 # Text chunking  (reused from generate_audio.py)
@@ -111,37 +118,48 @@ def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHUNK_CHARS) 
 # TTS call (single chunk)
 # ---------------------------------------------------------------------------
 
-def _generate_speech(text: str, api_base: str, model: str, voice: str,
-                     timeout: int) -> bytes | None:
-    """Generate speech for one text chunk. Returns WAV bytes or None."""
-    url = f"{api_base.rstrip('/')}/generate-speech"
-    payload = {
-        "model": model,
-        "contents": text,
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": voice
-                    }
-                }
-            }
-        }
-    }
+async def _generate_speech_async(text, voice):
+    """Generate speech for a text chunk using edge-tts."""
+    # Map AIStudio voice name to edge-tts voice if necessary
+    actual_voice = VOICE_MAPPING.get(voice, voice)
+    
     start = time.time()
     try:
-        resp = requests.post(url, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        audio_b64 = data['candidates'][0]['content']['parts'][0]['inlineData']['data']
-        audio_bytes = base64.b64decode(audio_b64)
+        communicate = edge_tts.Communicate(text, actual_voice)
+        audio_bytes = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes += chunk["data"]
+        
+        if not audio_bytes:
+            return None
+
+        # Convert MP3 (edge-tts default) to WAV using FFmpeg
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            process = subprocess.Popen(
+                [ffmpeg, "-i", "pipe:0", "-f", "wav", "-ar", "24000", "-ac", "1", "pipe:1"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            wav_bytes, err = process.communicate(input=audio_bytes)
+            if process.returncode == 0:
+                audio_bytes = wav_bytes
+            else:
+                print(f"  ⚠ FFmpeg conversion failed: {err.decode()[:200]}")
+
         elapsed = time.time() - start
-        print(f"    ✓ Generated {len(audio_bytes)/1024:.1f} KB in {elapsed:.1f}s")
+        print(f"    ✓ Generated {len(audio_bytes)/1024:.1f} KB in {elapsed:.1f}s (edge-tts: {actual_voice})")
         return audio_bytes
     except Exception as e:
-        print(f"    ✗ TTS failed: {e}")
+        print(f"  ✗ edge-tts Failed: {e}")
         return None
+
+def _generate_speech(text: str, api_base: str, model: str, voice: str,
+                     timeout: int) -> bytes | None:
+    """Synchronous wrapper for _generate_speech_async."""
+    return asyncio.run(_generate_speech_async(text, voice))
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +274,13 @@ def generate_chunked_audio(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pick voice based on language if still default
+    if voice == DEFAULT_VOICE or voice == "Charon":
+        if language == "sw":
+            voice = "sw-KE-RafikiNeural"
+        else:
+            voice = "es-ES-AlvaroNeural"
 
     chunks = split_text_into_chunks(script_text, max_chars=max_chunk_chars)
 

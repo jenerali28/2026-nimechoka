@@ -12,6 +12,7 @@ pyyaml>=6.0.1
 
 # --- OpenAI Whisper (local speech-to-text for Step 1) ---
 openai-whisper>=20240930
+edge-tts>=6.1.12
 
 # --- Whisper dependencies (torch + numpy) ---
 torch>=2.0.0

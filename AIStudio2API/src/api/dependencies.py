@@ -29,12 +29,27 @@ def get_worker_task():
 
 
 def get_server_state() -> Dict[str, Any]:
-    from server import is_initializing, is_playwright_ready, is_browser_connected, is_page_ready
+    from server import is_initializing, is_playwright_ready, is_browser_connected, is_page_ready, browser_instance
+    
+    # Check if browser is still actually connected if it was supposed to be
+    actual_browser_connected = is_browser_connected
+    actual_page_ready = is_page_ready
+    
+    if is_browser_connected and browser_instance:
+        if not browser_instance.is_connected():
+            actual_browser_connected = False
+            actual_page_ready = False
+            # Update the global state in server module as well
+            import server
+            server.is_browser_connected = False
+            server.is_page_ready = False
+            server.logger.error("检测到浏览器连接已断开，已更新状态。")
+
     return {
         'is_initializing': is_initializing,
         'is_playwright_ready': is_playwright_ready,
-        'is_browser_connected': is_browser_connected,
-        'is_page_ready': is_page_ready
+        'is_browser_connected': actual_browser_connected,
+        'is_page_ready': actual_page_ready
     }
 
 

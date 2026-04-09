@@ -13,6 +13,18 @@ LOGS_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOGS_DIR"
 
 # ---------------------------------------------------------------------------
+# 0. Install requirements
+# ---------------------------------------------------------------------------
+echo "📦 Installing requirements..."
+if command -v uv &>/dev/null; then
+    uv pip install -r "$SCRIPT_DIR/requirements.txt"
+elif command -v pip3 &>/dev/null; then
+    pip3 install -r "$SCRIPT_DIR/requirements.txt"
+else
+    pip install -r "$SCRIPT_DIR/requirements.txt"
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Kill existing instances (cross-platform)
 # ---------------------------------------------------------------------------
 echo "🛑 Stopping existing services..."
@@ -34,7 +46,10 @@ else
     pkill -9 -f "launch_camoufox.py" 2>/dev/null || true
     pkill -9 -f "app_launcher.py" 2>/dev/null || true
     pkill -9 -f "bulk_processor.py" 2>/dev/null || true
-    fuser -k 8000/tcp 9000/tcp 2048/tcp 2>/dev/null || true
+    pkill -9 -f "gateway.py" 2>/dev/null || true
+    # Kill camoufox-bin instances holding worker debug ports (9222-9225)
+    pkill -9 -f "camoufox-bin.*-juggler-pipe" 2>/dev/null || true
+    fuser -k 8000/tcp 9000/tcp 2048/tcp 9222/tcp 9223/tcp 9224/tcp 9225/tcp 2>/dev/null || true
 fi
 
 sleep 2
@@ -67,86 +82,10 @@ echo "  Grok2API PID: $GROK_PID"
 cd "$SCRIPT_DIR"
 
 # ---------------------------------------------------------------------------
-# 3. Start AIStudio2API (TTS + script rewriting)
+# 3. Wait for Grok2API to be ready
 # ---------------------------------------------------------------------------
-echo "🚀 Starting AIStudio2API..."
-
-mkdir -p "$AISTUDIO_DIR/data"
-
-# Auto-detect saved auth profiles
-AUTH_DIR="$AISTUDIO_DIR/data/auth_profiles/saved"
-if [ -d "$AUTH_DIR" ]; then
-    PROFILES=($(ls -t "$AUTH_DIR"/auth_auto_*.json 2>/dev/null))
-    PROFILE_1="${PROFILES[0]##*/}"
-    PROFILE_2="${PROFILES[1]##*/}"
-    echo "  Found profiles: $PROFILE_1 $PROFILE_2"
-else
-    PROFILE_1=""
-    PROFILE_2=""
-fi
-
-# Write workers.json
-if [ -n "$PROFILE_1" ] && [ -n "$PROFILE_2" ]; then
-cat > "$AISTUDIO_DIR/data/workers.json" <<EOF
-{
-  "workers": [
-    {"id": "w1", "profile": "$PROFILE_1", "port": 3001, "camoufox_port": 9223},
-    {"id": "w2", "profile": "$PROFILE_2", "port": 3002, "camoufox_port": 9224}
-  ],
-  "settings": {"recovery_hours": 6}
-}
-EOF
-elif [ -n "$PROFILE_1" ]; then
-cat > "$AISTUDIO_DIR/data/workers.json" <<EOF
-{
-  "workers": [
-    {"id": "w1", "profile": "$PROFILE_1", "port": 3001, "camoufox_port": 9223}
-  ],
-  "settings": {"recovery_hours": 6}
-}
-EOF
-else
-cat > "$AISTUDIO_DIR/data/workers.json" <<EOF
-{"workers": [], "settings": {"recovery_hours": 6}}
-EOF
-fi
-
-# Write gui_config.json
-cat > "$AISTUDIO_DIR/data/gui_config.json" <<EOF
-{
-  "fastapi_port": 2048,
-  "camoufox_debug_port": 9222,
-  "stream_port": 3120,
-  "stream_port_enabled": true,
-  "proxy_enabled": false,
-  "proxy_address": "",
-  "helper_enabled": false,
-  "helper_endpoint": "",
-  "launch_mode": "headless",
-  "script_injection_enabled": false,
-  "worker_mode_enabled": true,
-  "log_enabled": true
-}
-EOF
-
-cd "$AISTUDIO_DIR"
-export PYTHONPATH=src
-
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OS" == "Windows_NT" ]]; then
-    uv run python src/app_launcher.py > "$LOGS_DIR/aistudio.log" 2>&1 &
-else
-    nohup uv run python src/app_launcher.py > "$LOGS_DIR/aistudio.log" 2>&1 &
-fi
-
-AISTUDIO_PID=$!
-echo "  AIStudio2API PID: $AISTUDIO_PID"
-cd "$SCRIPT_DIR"
-
-# ---------------------------------------------------------------------------
-# 4. Wait for services to be ready
-# ---------------------------------------------------------------------------
-echo "⏳ Waiting for services to initialize (45s)..."
-sleep 45
+echo "⏳ Waiting for Grok2API to initialize (15s)..."
+sleep 15
 
 # Health checks
 echo "🔍 Checking services..."
@@ -164,16 +103,14 @@ check_service() {
 }
 
 GROK_OK=0
-AISTUDIO_OK=0
-
 check_service "http://localhost:8000/v1/models" "Grok2API" && GROK_OK=1 || true
-check_service "http://localhost:2048/health" "AIStudio2API" && AISTUDIO_OK=1 || true
 
-# Trigger AIStudio worker start
-if [ "$AISTUDIO_OK" -eq 1 ]; then
-    curl -s -X POST http://127.0.0.1:9000/api/control/start \
-        -H "Content-Type: application/json" \
-        -d @"$AISTUDIO_DIR/data/gui_config.json" > /dev/null 2>&1 || true
+if [ "$GROK_OK" -eq 0 ]; then
+    echo ""
+    echo "  ⚠ Grok2API is not responding. Check logs/grok2api.log"
+    echo "  Tip: Make sure grok2api/data/token.json has valid SSO tokens."
+    echo "  Run: python utils/manage_grok_cookies.py <your_sso_token>"
+    echo ""
 fi
 
 if [ "$GROK_OK" -eq 0 ]; then

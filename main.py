@@ -326,13 +326,8 @@ def pipeline(
         print("  [0/8] Starting API Services")
         print("=" * 60)
 
-        aistudio_ok = start_aistudio(aistudio_port)
-        if not aistudio_ok:
-            print("\n  ⚠ AIStudio2API failed to start.")
-            print("    You can start it manually and re-run with --skip-services")
-            answer = input("    Continue anyway? (y/n): ").strip().lower()
-            if answer != "y":
-                return False
+        # AIStudio2API skipped - no longer used for TTS, script rewrite, or images
+        print("  (AIStudio2API skipped - no longer needed for current pipeline)")
 
         meta_ok = start_metaai(meta_port)
         if not meta_ok:
