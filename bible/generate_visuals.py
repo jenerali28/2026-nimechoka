@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-Visual Prompt Generator — Photorealistic Biblical-Era Scene Prompts.
+Visual Prompt Generator — 2D Illustration Animation Frame Prompts.
 
-Splits a Swahili narration script into segments and generates
-image + video prompts for each, targeting realistic biblical-era visuals.
+Splits a narration script into segments and generates separate
+image prompts and video prompts for each scene.
+
+IMAGE PROMPTS: Rich 2D illustration style — big expressive cartoon heads,
+stick-figure bodies, flat digital ink art. Characters adapt to the story
+context (cultural appearance, clothing) but always share the same art style.
+
+VIDEO PROMPTS: Motion-only. No character description. Pure camera movement
+and environmental action beats. Character appearance is locked by the image,
+not re-described in the video prompt.
 
 Uses Gemini WebUI (G_3_0_PRO) in batches of 8.
-Includes a self-review pass for visual consistency.
 """
 
 import asyncio
@@ -29,66 +36,115 @@ from gemini_webapi.constants import Model
 BATCH_SIZE = 8
 MAX_RETRIES = 3
 
-# Fixed visual style — no source video to analyze
-VISUAL_STYLE = "Photorealistic, cinematic biblical-era scene"
-STYLE_SUB = "Epic historical drama cinematography, Middle Eastern ancient setting"
-COLOR_PALETTE = "Warm earthy tones, golden sunlight, deep desert ochres, dusty sandstone, olive greens, deep blue sky"
-RENDERING = "Natural film grain, dramatic chiaroscuro lighting, 35mm cinematic lens, shallow depth of field"
+# ---------------------------------------------------------------------------
+# Art style — applied to both image and video prompts
+# ---------------------------------------------------------------------------
 
-NEGATIVE_PROMPT = (
-    "cartoon, anime, CGI, 3D render, plastic texture, "
-    "modern clothing, contemporary objects, digital art, illustration, "
-    "watermark, text, subtitle, blurry, low quality, oversaturated, "
-    "fantasy lighting, neon colors, UI elements"
+# Character design rules injected into every prompt
+CHARACTER_RULES = """\
+CHARACTER DESIGN (mandatory for every scene):
+- Every character has an OVERSIZED cartoon head (~40% of total figure height) with a
+  highly-detailed realistic face: expressive eyes, prominent nose, heavy eyelids,
+  visible teeth when mouth is open, wrinkles/skin texture — drawn with thick black outlines.
+- Body is a STICK FIGURE: thin black lines for arms, legs, and torso. No muscle, no bulk.
+- Flat digital coloring. Hard black outlines on everything.
+- Characters ADAPT appearance to the story's cultural context:
+    Biblical/Middle Eastern → robes, head coverings, sandals, olive/brown skin
+    Chinese → hanfu robes, black hair, East Asian features
+    Viking → furs, horned helmet, blonde/red hair, pale skin
+    African → colorful kente/dashiki, dark skin, natural hair
+    Modern → contemporary clothing
+- Match the character's facial expression to the EMOTION in the script moment.
+  Do NOT default to angry/intense — use calm, curious, sad, joyful, fearful as appropriate.
+- Maximum 2 characters per scene. Position them clearly: left foreground, right background, etc.\
+"""
+
+IMAGE_NEGATIVE_PROMPT = (
+    "photorealistic, 3D render, CGI, anime, chibi, full body proportions, "
+    "realistic body, muscular, detailed hands, watermark, text, subtitle, "
+    "blurry, low quality, multiple characters merged, collage, grid layout, "
+    "tiled images, split screen, photo montage"
 )
 
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
-BATCH_PROMPT = """\
-You are an expert Prompt Engineer for AI image and video generation.
-I'll give you a set of SCRIPT SEGMENTS from a Swahili Bible narration.
-For each segment, generate prompts for PHOTOREALISTIC BIBLICAL-ERA visuals.
+IMAGE_BATCH_PROMPT = """\
+You are an expert Prompt Engineer for AI IMAGE generation (still frames).
+I'll give you SCRIPT SEGMENTS. For each, produce a structured JSON image prompt
+describing the scene as a 2D digital illustration still frame.
 
-VISUAL STYLE CONTEXT:
-- Style: {visual_style}
-- Sub-style: {style_sub}
-- Color palette: {color_palette}
-- Rendering: {rendering}
-- Setting: Ancient Middle East / biblical era (roughly 2000 BC - 30 AD depending on story)
-- People: Middle Eastern / North-East African appearance, period-accurate clothing
-  (robes, tunics, sandals, head coverings, leather belts)
-- Environments: Desert landscapes, stone buildings, olive groves, dusty roads,
-  ancient cities, temples, rivers, mountains, caves
+{character_rules}
+
+OUTPUT FORMAT — for each scene produce a JSON object matching this exact structure:
+{{
+  "meta": {{
+    "image_quality": "High",
+    "image_type": "Illustration/Animation Frame",
+    "resolution_estimation": "1280x720"
+  }},
+  "global_context": {{
+    "scene_description": "(one sentence: who is doing what, where, in the art style)",
+    "time_of_day": "(Daytime / Night / Dusk / Dawn)",
+    "weather_atmosphere": "(Clear / Stormy / Snowy / Dusty / etc.)",
+    "lighting": {{
+      "source": "(Natural sunlight / Torchlight / Moonlight / etc.)",
+      "direction": "(Top-down / Side / Front / etc.)",
+      "quality": "(Soft / Hard / Dramatic)",
+      "color_temp": "(Warm / Cool / Neutral)"
+    }}
+  }},
+  "color_palette": {{
+    "dominant_hex_estimates": ["#XXXXXX", "#XXXXXX", "#XXXXXX"],
+    "accent_colors": ["color1", "color2"],
+    "contrast_level": "(High / Medium / Low)"
+  }},
+  "composition": {{
+    "camera_angle": "(Eye-level / Low angle / High angle / Over-shoulder)",
+    "framing": "(Wide shot / Medium shot / Close-up / Medium-close)",
+    "depth_of_field": "(Deep — everything in focus / Shallow — background blurred)",
+    "focal_point": "(what the eye is drawn to)"
+  }},
+  "objects": [
+    {{
+      "id": "obj_001",
+      "label": "(descriptive label)",
+      "category": "(Person/Character | Animal | Object/Prop | Environment/Flora | Environment/Terrain | Environment/Sky)",
+      "location": "(Top-Left | Top-Center | Top-Right | Center-Left | Center | Center-Right | Bottom-Left | Bottom-Center | Bottom-Right | Background | Foreground | Midground)",
+      "prominence": "(Foreground | Midground | Background)",
+      "visual_attributes": {{
+        "color": "(description)",
+        "texture": "(Smooth/Digital | Wood | Fabric | Stone | etc.)",
+        "material": "(Digital ink | Wood | Cloth | etc.)",
+        "state": "(Undamaged | Damaged | In motion | etc.)",
+        "dimensions_relative": "(Very Small | Small | Medium | Large | Very Large)"
+      }},
+      "micro_details": ["detail 1", "detail 2"],
+      "pose_or_orientation": "(description of pose, direction facing, or spatial orientation)",
+      "text_content": null
+    }}
+  ],
+  "text_ocr": {{
+    "present": false,
+    "content": null
+  }},
+  "semantic_relationships": [
+    "(subject) is (doing/holding/near) (object)",
+    "(character) is positioned (relative to) (other character/object)"
+  ]
+}}
+
+RULES:
+- The first object in the array MUST be the main character (if present).
+- Characters must always be described with: oversized cartoon head, stick-figure body,
+  thick black outlines, flat digital coloring.
+- Include at least one environment object (background, ground, sky).
+- semantic_relationships must list every meaningful spatial or action connection.
+- Do NOT produce a collage or multi-panel layout — one unified scene only.
 
 SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
 {segments_text}
-
-For EACH segment, generate:
-
-**Image Prompt** (MUST be in English):
-- Start with: "Photorealistic cinematic biblical-era scene."
-- Describe the exact moment from the narration
-- Include: specific character appearances (age, expression, clothing, posture)
-- Include: environment (architecture, landscape, weather, time of day)
-- Include: lighting (golden hour, harsh midday, torchlight, moonlight)
-- Include: camera angle (wide establishing shot, close-up, over-shoulder, low angle)
-- End with: "35mm film, natural lighting, historically accurate, cinematic composition."
-
-**Video Prompt** (MUST include timestamped choreography, in English):
-Break 6 seconds into timed action beats:
-  "[0.0s-2.5s] Description of what happens..."
-  "[2.5s-4.5s] Description of next action..."
-  "[4.5s-6.0s] Description of final moment..."
-
-Rules for action beats:
-- COVER THE FULL 6 SECONDS
-- Keep movements SLOW and DELIBERATE
-- One specific action per beat
-- Include camera movement in at least one beat
-- Prefer: gazing, walking slowly, turning head, gesturing, kneeling, rising
-- AVOID: fast action, fighting close-ups, running (these create artifacts)
 
 OUTPUT: A single valid JSON object:
 {{
@@ -96,16 +152,94 @@ OUTPUT: A single valid JSON object:
     {{
       "scene_number": {start_num},
       "swahili_script": "(the script segment text)",
-      "image_prompt": {{
-         "prompt": "(full image prompt in English)",
-         "negative_prompt": "{negative_prompt}",
-         "aspect_ratio": "16:9"
-      }},
-      "video_prompt": {{
-         "prompt": "(scene setup + timestamped beats + quality tag)",
-         "duration": "6s",
-         "camera_motion": "(primary camera movement)"
-      }}
+      "image_prompt": {{ ...the structured prompt object above... }},
+      "negative_prompt": "{negative_prompt}"
+    }}
+  ]
+}}
+
+Generate EXACTLY {batch_size} scenes. Return ONLY the JSON, no other text.
+"""
+
+VIDEO_BATCH_PROMPT = """\
+You are an expert Prompt Engineer for AI VIDEO generation (6-second animated clips).
+I'll give you SCRIPT SEGMENTS. For each, produce a structured JSON video prompt
+describing the scene as a 2D animated clip — including what the characters are DOING
+and how the camera moves.
+
+{character_rules}
+
+VIDEO PROMPT RULES:
+- Describe BOTH the scene action (what characters are doing) AND camera movement.
+- Use video-generation language: "the figure slowly raises its arm", "camera pans left",
+  "wind ripples through the trees", "character kneels down", "slow zoom toward face".
+- Refer to characters by role/position only: "the figure on the left", "the seated character",
+  "the standing figure" — do NOT re-describe hair color, clothing details, or face features
+  (those are locked by the image prompt).
+- Break 6 seconds into timed action beats covering the FULL duration.
+- Keep all movements SLOW and DELIBERATE. Avoid fast cuts, running, fighting close-ups.
+
+OUTPUT FORMAT — for each scene produce a JSON object matching this exact structure:
+{{
+  "meta": {{
+    "clip_duration": "6s",
+    "style": "2D animation, flat illustration, stick-figure characters with oversized cartoon heads"
+  }},
+  "global_context": {{
+    "scene_description": "(one sentence: what is happening in this clip)",
+    "time_of_day": "(Daytime / Night / Dusk / Dawn)",
+    "weather_atmosphere": "(Clear / Stormy / Snowy / etc.)",
+    "lighting": {{
+      "source": "(Natural sunlight / Torchlight / Moonlight / etc.)",
+      "direction": "(Top-down / Side / Front)",
+      "quality": "(Soft / Hard / Dramatic)",
+      "color_temp": "(Warm / Cool / Neutral)"
+    }}
+  }},
+  "camera_motion": {{
+    "primary_move": "(slow pan left | slow pan right | gentle zoom in | gentle zoom out | static | slow tilt up | slow tilt down)",
+    "secondary_move": "(optional secondary move or null)",
+    "start_frame": "(describe what the camera sees at 0.0s)",
+    "end_frame": "(describe what the camera sees at 6.0s)"
+  }},
+  "action_beats": [
+    {{
+      "time_range": "0.0s-2.0s",
+      "action": "(what is happening — character action + any environmental motion)",
+      "camera": "(camera state during this beat)"
+    }},
+    {{
+      "time_range": "2.0s-4.5s",
+      "action": "(next action beat)",
+      "camera": "(camera state)"
+    }},
+    {{
+      "time_range": "4.5s-6.0s",
+      "action": "(final beat — can be a hold, a reaction, or a transition gesture)",
+      "camera": "(camera state)"
+    }}
+  ],
+  "objects_in_motion": [
+    {{
+      "label": "(what is moving)",
+      "motion_description": "(how it moves)"
+    }}
+  ],
+  "semantic_relationships": [
+    "(subject) is (doing/moving toward/reacting to) (object/other character)"
+  ]
+}}
+
+SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
+{segments_text}
+
+OUTPUT: A single valid JSON object:
+{{
+  "scenes": [
+    {{
+      "scene_number": {start_num},
+      "swahili_script": "(the script segment text)",
+      "video_prompt": {{ ...the structured prompt object above... }}
     }}
   ]
 }}
@@ -114,33 +248,33 @@ Generate EXACTLY {batch_size} scenes. Return ONLY the JSON, no other text.
 """
 
 REVIEW_PROMPT = """\
-Review these visual prompts for a Bible story video.
-Check for VISUAL CONSISTENCY — characters should be described the same way
-throughout, settings should be geographically consistent, lighting should be
-coherent within the same time of day.
+Review these scene prompts for a 2D animated story video.
+Check that every scene uses the correct art style and that character emotions
+vary naturally across scenes (not the same expression everywhere).
 
 SCENES:
 {scenes_yaml}
 
 Check:
-1. Are characters described consistently? (same age, clothing, features across scenes)
-2. Is the setting consistent where it should be?
-3. Do lighting/time-of-day references make sense chronologically?
-4. Are any prompts too vague or too modern-looking?
+1. Does every image_prompt describe characters with oversized cartoon heads + stick-figure bodies?
+2. Do character expressions match the script moment (not always angry/intense)?
+3. Is the cultural appearance consistent with the story setting across all scenes?
+4. Does any image_prompt risk producing a collage or multi-panel layout?
+5. Do video_prompt action_beats cover the full 6 seconds?
 
-If you find inconsistencies, output a JSON object with the fixes:
+Output fixes as JSON:
 {{
   "fixes": [
     {{
       "scene_number": N,
       "field": "image_prompt" or "video_prompt",
-      "issue": "description of the problem",
-      "fixed_prompt": "the corrected prompt text"
+      "issue": "description",
+      "fix": "(describe what to change — do not rewrite the full prompt)"
     }}
   ]
 }}
 
-If everything is consistent, output: {{"fixes": []}}
+If everything is fine: {{"fixes": []}}
 Return ONLY the JSON.
 """
 
@@ -167,7 +301,6 @@ def _parse_json_block(text: str) -> str:
 
 def split_script_into_segments(script_text: str, num_segments: int) -> list[str]:
     """Split script into N roughly equal segments by sentence boundaries."""
-    # Split into sentences
     sentences = re.split(r'(?<=[.!?…])\s+', script_text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
 
@@ -175,13 +308,11 @@ def split_script_into_segments(script_text: str, num_segments: int) -> list[str]
         return [script_text] * num_segments
 
     if len(sentences) <= num_segments:
-        # Fewer sentences than segments — pad
         segments = sentences[:]
         while len(segments) < num_segments:
             segments.append(segments[-1])
         return segments
 
-    # Distribute sentences across segments
     segments = []
     per_segment = len(sentences) / num_segments
     for i in range(num_segments):
@@ -195,135 +326,251 @@ def split_script_into_segments(script_text: str, num_segments: int) -> list[str]
     return segments
 
 
+def _make_placeholder_image_prompt(seg_text: str) -> dict:
+    return {
+        "meta": {"image_quality": "Medium", "image_type": "Illustration/Animation Frame", "resolution_estimation": "1280x720"},
+        "global_context": {
+            "scene_description": f"2D illustration scene: {seg_text[:100]}",
+            "time_of_day": "Daytime", "weather_atmosphere": "Clear",
+            "lighting": {"source": "Natural sunlight", "direction": "Top-down", "quality": "Soft", "color_temp": "Warm"}
+        },
+        "color_palette": {"dominant_hex_estimates": ["#87CEEB", "#8B6914", "#228B22"], "accent_colors": ["Brown", "Green"], "contrast_level": "High"},
+        "composition": {"camera_angle": "Eye-level", "framing": "Medium shot", "depth_of_field": "Deep", "focal_point": "Main character"},
+        "objects": [{"id": "obj_001", "label": "Main Character", "category": "Person/Character", "location": "Center", "prominence": "Foreground",
+                     "visual_attributes": {"color": "Varied", "texture": "Smooth/Digital", "material": "Digital ink", "state": "Undamaged", "dimensions_relative": "Large"},
+                     "micro_details": ["Oversized cartoon head", "Stick-figure body", "Thick black outlines"], "pose_or_orientation": "Standing, facing forward", "text_content": None}],
+        "text_ocr": {"present": False, "content": None},
+        "semantic_relationships": ["Main character is standing in the scene"],
+    }
+
+
+def _make_placeholder_video_prompt(scene_num: int) -> dict:
+    return {
+        "meta": {"clip_duration": "6s", "style": "2D animation, flat illustration, stick-figure characters with oversized cartoon heads"},
+        "global_context": {
+            "scene_description": f"Scene {scene_num}: character stands in environment",
+            "time_of_day": "Daytime", "weather_atmosphere": "Clear",
+            "lighting": {"source": "Natural sunlight", "direction": "Top-down", "quality": "Soft", "color_temp": "Warm"}
+        },
+        "camera_motion": {"primary_move": "gentle zoom in", "secondary_move": None,
+                          "start_frame": "Wide shot of scene", "end_frame": "Slightly closer on character"},
+        "action_beats": [
+            {"time_range": "0.0s-2.0s", "action": "Scene opens, character stands still, ambient wind moves background elements", "camera": "Static wide shot"},
+            {"time_range": "2.0s-4.5s", "action": "Character slowly turns head, looks around", "camera": "Gentle zoom in begins"},
+            {"time_range": "4.5s-6.0s", "action": "Character holds position, scene settles", "camera": "Camera holds on character"},
+        ],
+        "objects_in_motion": [{"label": "Background foliage", "motion_description": "Gentle sway from wind"}],
+        "semantic_relationships": ["Character is standing in the environment"],
+    }
+
+
+async def _run_image_batch(scene_tasks: list, batch_idx: int, num_batches: int) -> list:
+    """Generate structured JSON image prompts for a batch of scenes."""
+    batch_size = len(scene_tasks)
+    start_num = scene_tasks[0][0]
+    end_num = scene_tasks[-1][0]
+
+    segments_text = ""
+    for sn, seg_text in scene_tasks:
+        segments_text += f"\n--- SEGMENT {sn} ---\n{seg_text}\n"
+
+    prompt = IMAGE_BATCH_PROMPT.format(
+        character_rules=CHARACTER_RULES,
+        negative_prompt=IMAGE_NEGATIVE_PROMPT,
+        start_num=start_num,
+        end_num=end_num,
+        segments_text=segments_text,
+        batch_size=batch_size,
+    )
+
+    print(f"\n  [Image] Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num}...")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            chat = client.start_chat(model=Model.G_3_0_PRO)
+            resp = await chat.send_message(prompt)
+            json_text = _parse_json_block(resp.text)
+            batch_data = json.loads(json_text)
+            batch_scenes = batch_data.get("scenes", [])
+            if batch_scenes:
+                for k, scene in enumerate(batch_scenes):
+                    if k < len(scene_tasks):
+                        scene["scene_number"] = scene_tasks[k][0]
+                print(f"    ✅ Got {len(batch_scenes)} image prompts")
+                return batch_scenes
+            print(f"    ⚠ No scenes in response, retrying...")
+        except Exception as e:
+            print(f"    ⚠ Attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(5 * attempt)
+
+    print(f"    ❌ Image batch {batch_idx + 1} failed — using placeholders")
+    return [
+        {
+            "scene_number": sn,
+            "swahili_script": seg_text,
+            "image_prompt": _make_placeholder_image_prompt(seg_text),
+            "negative_prompt": IMAGE_NEGATIVE_PROMPT,
+        }
+        for sn, seg_text in scene_tasks
+    ]
+
+
+async def _run_video_batch(scene_tasks: list, image_scenes: dict,
+                           batch_idx: int, num_batches: int) -> list:
+    """Generate structured JSON video prompts for a batch of scenes."""
+    batch_size = len(scene_tasks)
+    start_num = scene_tasks[0][0]
+    end_num = scene_tasks[-1][0]
+
+    # Include the scene_description from the image prompt as context
+    segments_text = ""
+    for sn, seg_text in scene_tasks:
+        img_scene = image_scenes.get(sn, {})
+        img_prompt = img_scene.get("image_prompt", {})
+        scene_desc = ""
+        if isinstance(img_prompt, dict):
+            scene_desc = img_prompt.get("global_context", {}).get("scene_description", "")
+        segments_text += f"\n--- SEGMENT {sn} ---\nScript: {seg_text}\nScene context: {scene_desc}\n"
+
+    prompt = VIDEO_BATCH_PROMPT.format(
+        character_rules=CHARACTER_RULES,
+        start_num=start_num,
+        end_num=end_num,
+        segments_text=segments_text,
+        batch_size=batch_size,
+    )
+
+    print(f"\n  [Video] Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num}...")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            chat = client.start_chat(model=Model.G_3_0_PRO)
+            resp = await chat.send_message(prompt)
+            json_text = _parse_json_block(resp.text)
+            batch_data = json.loads(json_text)
+            batch_scenes = batch_data.get("scenes", [])
+            if batch_scenes:
+                for k, scene in enumerate(batch_scenes):
+                    if k < len(scene_tasks):
+                        scene["scene_number"] = scene_tasks[k][0]
+                print(f"    ✅ Got {len(batch_scenes)} video prompts")
+                return batch_scenes
+            print(f"    ⚠ No scenes in response, retrying...")
+        except Exception as e:
+            print(f"    ⚠ Attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(5 * attempt)
+
+    print(f"    ❌ Video batch {batch_idx + 1} failed — using placeholders")
+    return [
+        {"scene_number": sn, "video_prompt": _make_placeholder_video_prompt(sn)}
+        for sn, _ in scene_tasks
+    ]
+
+
+def _merge_image_and_video(image_scenes: list, video_scenes: list) -> list:
+    """Merge image and video prompt results into unified scene dicts."""
+    video_map = {s["scene_number"]: s.get("video_prompt") for s in video_scenes}
+    merged = []
+    for scene in image_scenes:
+        sn = scene["scene_number"]
+        scene["video_prompt"] = video_map.get(sn, _make_placeholder_video_prompt(sn))
+        merged.append(scene)
+    return merged
+
+
+async def _run_consistency_review(all_scenes: list) -> list:
+    """Review image prompts for art style consistency. Returns updated scenes list."""
+    print(f"\n  🔍 Running image consistency review...")
+    try:
+        # Only review image_prompt fields
+        review_input = [
+            {"scene_number": s["scene_number"],
+             "image_prompt": s.get("image_prompt", {})}
+            for s in all_scenes[:24]
+        ]
+        scenes_yaml = yaml.dump(review_input, default_flow_style=False, allow_unicode=True)
+        review_prompt = REVIEW_PROMPT.format(scenes_yaml=scenes_yaml)
+
+        chat = client.start_chat(model=Model.G_3_0_PRO)
+        resp = await chat.send_message(review_prompt)
+        review_json = _parse_json_block(resp.text)
+        review_data = json.loads(review_json)
+        fixes = review_data.get("fixes", [])
+
+        if fixes:
+            print(f"    Found {len(fixes)} consistency issues, applying fixes...")
+            scene_map = {s["scene_number"]: s for s in all_scenes}
+            for fix in fixes:
+                sn = fix.get("scene_number")
+                fixed_prompt = fix.get("fixed_prompt", "")
+                if sn and fixed_prompt and sn in scene_map:
+                    ip = scene_map[sn].get("image_prompt", {})
+                    if isinstance(ip, dict):
+                        ip["prompt"] = fixed_prompt
+                        print(f"    ✓ Fixed scene {sn} image_prompt")
+        else:
+            print(f"    ✅ All image prompts are consistent!")
+    except Exception as e:
+        print(f"    ⚠ Consistency review failed (non-critical): {e}")
+    return all_scenes
+
+
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
 
 async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
-    """Generate image + video prompts for all clips.
+    """Generate image + video prompts for all clips (two separate passes).
 
     Returns a dict with 'scenes' list ready for YAML output.
     """
     await client.init(timeout=300, watchdog_timeout=120)
 
     segments = split_script_into_segments(script_text, clip_count)
+    scene_tasks = [(i + 1, segments[i]) for i in range(clip_count)]
     num_batches = math.ceil(clip_count / BATCH_SIZE)
 
     print(f"\n{'='*60}")
-    print(f"  🎨 Visual Prompt Generator — Biblical Era")
+    print(f"  🎨 Visual Prompt Generator — 2D Illustration Style")
     print(f"{'='*60}")
-    print(f"  Clip count: {clip_count}")
-    print(f"  Batches: {num_batches} × {BATCH_SIZE}")
-    print(f"  Style: {VISUAL_STYLE}")
+    print(f"  Clip count : {clip_count}")
+    print(f"  Batches    : {num_batches} × {BATCH_SIZE}")
+    print(f"  Art style  : Big cartoon heads + stick-figure bodies")
+    print(f"  Pass 1     : Image prompts (scene composition + characters)")
+    print(f"  Pass 2     : Video prompts (motion only, no character description)")
 
-    all_scenes = []
-
+    # --- Pass 1: Image prompts ---
+    image_scenes_flat = []
     for batch_idx in range(num_batches):
         start_i = batch_idx * BATCH_SIZE
         end_i = min(start_i + BATCH_SIZE, clip_count)
-        batch_segments = segments[start_i:end_i]
-        batch_size = len(batch_segments)
-        start_num = start_i + 1
-        end_num = end_i
+        batch = scene_tasks[start_i:end_i]
+        result = await _run_image_batch(batch, batch_idx, num_batches)
+        image_scenes_flat.extend(result)
 
-        # Format segments
-        segments_text = ""
-        for j, seg in enumerate(batch_segments):
-            scene_num = start_i + j + 1
-            segments_text += f"\n--- SEGMENT {scene_num} ---\n{seg}\n"
+    image_scenes_map = {s["scene_number"]: s for s in image_scenes_flat}
 
-        prompt = BATCH_PROMPT.format(
-            visual_style=VISUAL_STYLE,
-            style_sub=STYLE_SUB,
-            color_palette=COLOR_PALETTE,
-            rendering=RENDERING,
-            negative_prompt=NEGATIVE_PROMPT,
-            start_num=start_num,
-            end_num=end_num,
-            segments_text=segments_text,
-            batch_size=batch_size,
-        )
+    # --- Pass 2: Video prompts (informed by image context) ---
+    video_scenes_flat = []
+    for batch_idx in range(num_batches):
+        start_i = batch_idx * BATCH_SIZE
+        end_i = min(start_i + BATCH_SIZE, clip_count)
+        batch = scene_tasks[start_i:end_i]
+        result = await _run_video_batch(batch, image_scenes_map, batch_idx, num_batches)
+        video_scenes_flat.extend(result)
 
-        print(f"\n  Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num}...")
+    # --- Merge ---
+    all_scenes = _merge_image_and_video(image_scenes_flat, video_scenes_flat)
 
-        batch_done = False
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                chat = client.start_chat(model=Model.G_3_0_PRO)
-                resp = await chat.send_message(prompt)
-                json_text = _parse_json_block(resp.text)
-                batch_data = json.loads(json_text)
-                batch_scenes = batch_data.get("scenes", [])
-
-                if batch_scenes:
-                    all_scenes.extend(batch_scenes)
-                    print(f"    ✅ Got {len(batch_scenes)} scenes")
-                    batch_done = True
-                    break
-                else:
-                    print(f"    ⚠ No scenes in response, retrying...")
-            except Exception as e:
-                print(f"    ⚠ Attempt {attempt} failed: {e}")
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(5 * attempt)
-
-        if not batch_done:
-            print(f"    ❌ Batch {batch_idx + 1} failed — generating placeholder prompts")
-            for j in range(batch_size):
-                scene_num = start_i + j + 1
-                all_scenes.append({
-                    "scene_number": scene_num,
-                    "swahili_script": batch_segments[j],
-                    "image_prompt": {
-                        "prompt": f"Photorealistic cinematic biblical-era scene. {VISUAL_STYLE}. Ancient Middle Eastern setting. 35mm film.",
-                        "negative_prompt": NEGATIVE_PROMPT,
-                        "aspect_ratio": "16:9",
-                    },
-                    "video_prompt": {
-                        "prompt": f"Photorealistic biblical scene. [0.0s-3.0s] Wide establishing shot of ancient landscape. [3.0s-6.0s] Slow camera push-in.",
-                        "duration": "6s",
-                        "camera_motion": "slow push-in",
-                    },
-                })
-
-    # --- Self-review for consistency ---
+    # --- Consistency review (image prompts only) ---
     if len(all_scenes) > 3:
-        print(f"\n  🔍 Running visual consistency review...")
-        try:
-            scenes_yaml = yaml.dump(all_scenes[:24], default_flow_style=False,
-                                     allow_unicode=True)  # Review first 24 scenes
-            review_prompt = REVIEW_PROMPT.format(scenes_yaml=scenes_yaml)
+        all_scenes = await _run_consistency_review(all_scenes)
 
-            chat = client.start_chat(model=Model.G_3_0_PRO)
-            resp = await chat.send_message(review_prompt)
-            review_json = _parse_json_block(resp.text)
-            review_data = json.loads(review_json)
-            fixes = review_data.get("fixes", [])
-
-            if fixes:
-                print(f"    Found {len(fixes)} consistency issues, applying fixes...")
-                for fix in fixes:
-                    scene_num = fix.get("scene_number")
-                    field = fix.get("field", "image_prompt")
-                    fixed_prompt = fix.get("fixed_prompt", "")
-                    if scene_num and fixed_prompt:
-                        for scene in all_scenes:
-                            if scene.get("scene_number") == scene_num:
-                                if field in scene and isinstance(scene[field], dict):
-                                    scene[field]["prompt"] = fixed_prompt
-                                    print(f"    ✓ Fixed scene {scene_num} {field}")
-                                break
-            else:
-                print(f"    ✅ All prompts are visually consistent!")
-
-        except Exception as e:
-            print(f"    ⚠ Consistency review failed (non-critical): {e}")
-
-    # Assemble final data
     final_data = {
-        "visual_style": VISUAL_STYLE,
-        "style_subcategory": STYLE_SUB,
-        "animation_complexity": "complex",
+        "art_style": "2D illustration — big cartoon heads, stick-figure bodies",
+        "animation_complexity": "moderate",
         "scenes": all_scenes,
     }
 
@@ -338,12 +585,11 @@ async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
 async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
     """Generate visual prompts driven by the audio chunks manifest.
 
-    Each chunk in the manifest specifies:
-      - text: the narration text for that chunk
-      - clips_needed: how many 6s video clips are needed for that chunk
-      - scene_numbers: the scene numbers assigned to those clips
+    Two-pass approach:
+      Pass 1 — Image prompts (scene composition, characters, environment)
+      Pass 2 — Video prompts (motion only, informed by image context)
 
-    This ensures perfect 1:1 mapping between audio segments and visuals.
+    Each chunk specifies: text, clips_needed, scene_numbers.
     """
     await client.init(timeout=300, watchdog_timeout=120)
 
@@ -351,16 +597,15 @@ async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
     total_clips = manifest.get("total_clips", sum(c["clips_needed"] for c in chunks))
 
     print(f"\n{'='*60}")
-    print(f"  🎨 Chunk-Aware Visual Prompt Generator — Biblical Era")
+    print(f"  🎨 Chunk-Aware Visual Prompt Generator — 2D Illustration")
     print(f"{'='*60}")
-    print(f"  Audio chunks: {len(chunks)}")
-    print(f"  Total clips:  {total_clips}")
-    print(f"  Style: {VISUAL_STYLE}")
+    print(f"  Audio chunks : {len(chunks)}")
+    print(f"  Total clips  : {total_clips}")
+    print(f"  Art style    : Big cartoon heads + stick-figure bodies")
+    print(f"  Pass 1       : Image prompts")
+    print(f"  Pass 2       : Video prompts (motion only)")
 
-    all_scenes = []
-
-    # Process chunks in batches (group multiple chunks per Gemini call)
-    # Build a flat list of (scene_number, chunk_text, clips_in_chunk) for batching
+    # Build flat list of (scene_number, segment_text)
     scene_tasks = []
     for chunk in chunks:
         chunk_text = chunk["text"]
@@ -368,129 +613,46 @@ async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
         scene_nums = chunk["scene_numbers"]
 
         if clips_needed == 1:
-            # One clip for this chunk — use the full text as the segment
             scene_tasks.append((scene_nums[0], chunk_text))
         else:
-            # Multiple clips for this chunk — split text into sub-segments
             sub_segments = split_script_into_segments(chunk_text, clips_needed)
             for j, sn in enumerate(scene_nums):
                 seg_text = sub_segments[j] if j < len(sub_segments) else sub_segments[-1]
                 scene_tasks.append((sn, seg_text))
 
-    # Process in batches of BATCH_SIZE
     num_batches = math.ceil(len(scene_tasks) / BATCH_SIZE)
 
+    # --- Pass 1: Image prompts ---
+    image_scenes_flat = []
     for batch_idx in range(num_batches):
         start_i = batch_idx * BATCH_SIZE
         end_i = min(start_i + BATCH_SIZE, len(scene_tasks))
-        batch_tasks = scene_tasks[start_i:end_i]
-        batch_size = len(batch_tasks)
-        start_num = batch_tasks[0][0]
-        end_num = batch_tasks[-1][0]
+        batch = scene_tasks[start_i:end_i]
+        result = await _run_image_batch(batch, batch_idx, num_batches)
+        image_scenes_flat.extend(result)
 
-        # Format segments
-        segments_text = ""
-        for sn, seg_text in batch_tasks:
-            segments_text += f"\n--- SEGMENT {sn} ---\n{seg_text}\n"
+    image_scenes_map = {s["scene_number"]: s for s in image_scenes_flat}
 
-        prompt = BATCH_PROMPT.format(
-            visual_style=VISUAL_STYLE,
-            style_sub=STYLE_SUB,
-            color_palette=COLOR_PALETTE,
-            rendering=RENDERING,
-            negative_prompt=NEGATIVE_PROMPT,
-            start_num=start_num,
-            end_num=end_num,
-            segments_text=segments_text,
-            batch_size=batch_size,
-        )
+    # --- Pass 2: Video prompts ---
+    video_scenes_flat = []
+    for batch_idx in range(num_batches):
+        start_i = batch_idx * BATCH_SIZE
+        end_i = min(start_i + BATCH_SIZE, len(scene_tasks))
+        batch = scene_tasks[start_i:end_i]
+        result = await _run_video_batch(batch, image_scenes_map, batch_idx, num_batches)
+        video_scenes_flat.extend(result)
 
-        print(f"\n  Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num}...")
+    # --- Merge ---
+    all_scenes = _merge_image_and_video(image_scenes_flat, video_scenes_flat)
 
-        batch_done = False
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                chat = client.start_chat(model=Model.G_3_0_PRO)
-                resp = await chat.send_message(prompt)
-                json_text = _parse_json_block(resp.text)
-                batch_data = json.loads(json_text)
-                batch_scenes = batch_data.get("scenes", [])
-
-                if batch_scenes:
-                    # Ensure scene numbers match what we expect
-                    for k, scene in enumerate(batch_scenes):
-                        expected_sn = batch_tasks[k][0] if k < len(batch_tasks) else None
-                        if expected_sn and scene.get("scene_number") != expected_sn:
-                            scene["scene_number"] = expected_sn
-
-                    all_scenes.extend(batch_scenes)
-                    print(f"    ✅ Got {len(batch_scenes)} scenes")
-                    batch_done = True
-                    break
-                else:
-                    print(f"    ⚠ No scenes in response, retrying...")
-            except Exception as e:
-                print(f"    ⚠ Attempt {attempt} failed: {e}")
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(5 * attempt)
-
-        if not batch_done:
-            print(f"    ❌ Batch {batch_idx + 1} failed — generating placeholder prompts")
-            for sn, seg_text in batch_tasks:
-                all_scenes.append({
-                    "scene_number": sn,
-                    "swahili_script": seg_text,
-                    "image_prompt": {
-                        "prompt": f"Photorealistic cinematic biblical-era scene. {VISUAL_STYLE}. Ancient Middle Eastern setting. 35mm film.",
-                        "negative_prompt": NEGATIVE_PROMPT,
-                        "aspect_ratio": "16:9",
-                    },
-                    "video_prompt": {
-                        "prompt": f"Photorealistic biblical scene. [0.0s-3.0s] Wide establishing shot of ancient landscape. [3.0s-6.0s] Slow camera push-in.",
-                        "duration": "6s",
-                        "camera_motion": "slow push-in",
-                    },
-                })
-
-    # --- Self-review for consistency (reuse existing logic) ---
+    # --- Consistency review ---
     if len(all_scenes) > 3:
-        print(f"\n  🔍 Running visual consistency review...")
-        try:
-            scenes_yaml = yaml.dump(all_scenes[:24], default_flow_style=False,
-                                     allow_unicode=True)
-            review_prompt = REVIEW_PROMPT.format(scenes_yaml=scenes_yaml)
+        all_scenes = await _run_consistency_review(all_scenes)
 
-            chat = client.start_chat(model=Model.G_3_0_PRO)
-            resp = await chat.send_message(review_prompt)
-            review_json = _parse_json_block(resp.text)
-            review_data = json.loads(review_json)
-            fixes = review_data.get("fixes", [])
-
-            if fixes:
-                print(f"    Found {len(fixes)} consistency issues, applying fixes...")
-                for fix in fixes:
-                    scene_num = fix.get("scene_number")
-                    field = fix.get("field", "image_prompt")
-                    fixed_prompt = fix.get("fixed_prompt", "")
-                    if scene_num and fixed_prompt:
-                        for scene in all_scenes:
-                            if scene.get("scene_number") == scene_num:
-                                if field in scene and isinstance(scene[field], dict):
-                                    scene[field]["prompt"] = fixed_prompt
-                                    print(f"    ✓ Fixed scene {scene_num} {field}")
-                                break
-            else:
-                print(f"    ✅ All prompts are visually consistent!")
-
-        except Exception as e:
-            print(f"    ⚠ Consistency review failed (non-critical): {e}")
-
-    # Assemble final data — include chunk mapping for assembly
     final_data = {
-        "visual_style": VISUAL_STYLE,
-        "style_subcategory": STYLE_SUB,
-        "animation_complexity": "complex",
-        "chunk_synced": True,  # Flag: this was generated from audio chunks
+        "art_style": "2D illustration — big cartoon heads, stick-figure bodies",
+        "animation_complexity": "moderate",
+        "chunk_synced": True,
         "chunk_mapping": [
             {
                 "chunk_index": c["chunk_index"],
@@ -536,7 +698,6 @@ if __name__ == "__main__":
         est_duration_sec = (word_count / 150) * 60
         clip_count = max(10, int(est_duration_sec / 6))
         print(f"  Auto clip count: {clip_count} ({word_count} words, ~{est_duration_sec/60:.1f} min)")
-
     final_data = asyncio.run(generate_visual_prompts(script_text, clip_count))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

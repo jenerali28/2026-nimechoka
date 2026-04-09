@@ -69,25 +69,28 @@ def load_prompts_file(path: Path) -> dict:
 
 
 def extract_character_context(prompts_data: dict) -> str:
+    """Extract art style context for image (Ken Burns) prompts only.
+
+    For video prompts we do NOT inject character context — video prompts
+    should describe motion only. Character appearance is locked by the image.
+    """
+    # Check for explicit recurring_characters field
     chars = prompts_data.get("recurring_characters", [])
-    if not chars:
-        scenes = prompts_data.get("scenes", [])
-        if scenes:
-            first = scenes[0]
-            vp = first.get("video_prompt", {})
-            subject = (first.get("subject", "")
-                       or (vp.get("prompt", "") if isinstance(vp, dict) else "")[:80])
-            if subject:
-                return (f"CONSISTENT CHARACTER: {subject}. "
-                        "Maintain EXACT same appearance in every scene.")
-        return ""
-    lines = []
-    for c in chars[:3]:
-        desc = c.get("visual_description", "") or c.get("canonical_description", "")
-        if desc:
-            lines.append(f"{c.get('name', 'character')}: {desc}")
-    return ("CONSISTENT CHARACTERS — maintain EXACT same appearance in every scene: "
-            + "; ".join(lines)) if lines else ""
+    if chars:
+        lines = []
+        for c in chars[:2]:
+            desc = c.get("visual_description", "") or c.get("canonical_description", "")
+            if desc:
+                lines.append(f"{c.get('name', 'character')}: {desc}")
+        if lines:
+            return "ART STYLE: 2D illustration, big cartoon head, stick-figure body. " + "; ".join(lines)
+
+    # Fall back to art_style field from generate_visuals output
+    art_style = prompts_data.get("art_style", "")
+    if art_style:
+        return f"ART STYLE: {art_style}."
+
+    return ""
 
 
 def _simplify_prompt(raw: str) -> str:
@@ -99,37 +102,124 @@ def _simplify_prompt(raw: str) -> str:
 
 def build_video_prompt(scene: dict, style_prefix: str, char_context: str,
                        simplified: bool = False) -> str:
+    """Flatten the structured video_prompt JSON into a string for the Grok video API.
+
+    The structured prompt has action_beats with time ranges and camera motion.
+    We serialize it into a natural-language string that video models understand.
+    Character appearance is NOT re-injected here — it's locked by the image.
+    """
     vp = scene.get("video_prompt", {})
-    raw = vp.get("prompt", "") if isinstance(vp, dict) else str(vp)
-    ip = scene.get("image_prompt", {})
-    prompt = raw or (ip.get("prompt", "") if isinstance(ip, dict) else str(ip))
+
+    # Handle structured JSON format (new format from generate_visuals.py)
+    if isinstance(vp, dict) and "action_beats" in vp:
+        meta = vp.get("meta", {})
+        style = meta.get("style", "2D animation, flat illustration, stick-figure characters with oversized cartoon heads")
+        gc = vp.get("global_context", {})
+        scene_desc = gc.get("scene_description", "")
+        cam = vp.get("camera_motion", {})
+        primary_move = cam.get("primary_move", "static")
+        beats = vp.get("action_beats", [])
+
+        parts = [f"{style}."]
+        if scene_desc:
+            parts.append(scene_desc)
+        for beat in beats:
+            tr = beat.get("time_range", "")
+            action = beat.get("action", "")
+            camera = beat.get("camera", "")
+            if tr and action:
+                parts.append(f"[{tr}] {action}. {camera}." if camera else f"[{tr}] {action}.")
+        parts.append(f"Camera: {primary_move}.")
+        prompt = " ".join(parts)
+
+    # Handle legacy flat string format
+    elif isinstance(vp, dict):
+        prompt = vp.get("prompt", "")
+    else:
+        prompt = str(vp) if vp else ""
+
     if not prompt:
-        return ""
+        prompt = (
+            "2D animation, flat illustration, stick-figure characters with oversized cartoon heads. "
+            "[0.0s-2.5s] Scene opens, character stands still, ambient wind moves background. "
+            "[2.5s-4.5s] Slow camera push-in, character slowly turns head. "
+            "[4.5s-6.0s] Camera holds, scene settles."
+        )
+
     if simplified:
         prompt = _simplify_prompt(prompt)
-    if style_prefix and not prompt.lower().startswith(style_prefix.lower()[:20]):
-        prompt = f"{style_prefix}. {prompt}"
-    if char_context:
-        prompt = f"{char_context}. {prompt}"
-    if "cinematic" not in prompt.lower():
-        prompt += " Cinematic quality, smooth natural motion."
+
     return prompt[:947] + "..." if len(prompt) > 950 else prompt
 
 
 def build_image_prompt(scene: dict, style_prefix: str, char_context: str,
                        simplified: bool = False) -> str:
+    """Flatten the structured image_prompt JSON into a string for the image API.
+
+    The structured prompt has objects array, composition, global_context, etc.
+    We serialize it into a natural-language description that image models understand.
+    """
     ip = scene.get("image_prompt", {})
-    raw = ip.get("prompt", "") if isinstance(ip, dict) else str(ip)
-    vp = scene.get("video_prompt", {})
-    prompt = raw or (vp.get("prompt", "") if isinstance(vp, dict) else str(vp))
+
+    # Handle structured JSON format (new format from generate_visuals.py)
+    if isinstance(ip, dict) and "global_context" in ip:
+        gc = ip.get("global_context", {})
+        scene_desc = gc.get("scene_description", "")
+        time_of_day = gc.get("time_of_day", "")
+        weather = gc.get("weather_atmosphere", "")
+        lighting = gc.get("lighting", {})
+        light_desc = f"{lighting.get('quality','')} {lighting.get('source','')} lighting, {lighting.get('color_temp','')} color temperature"
+
+        comp = ip.get("composition", {})
+        camera = comp.get("camera_angle", "")
+        framing = comp.get("framing", "")
+        focal = comp.get("focal_point", "")
+
+        objects = ip.get("objects", [])
+        obj_descs = []
+        for obj in objects:
+            label = obj.get("label", "")
+            loc = obj.get("location", "")
+            attrs = obj.get("visual_attributes", {})
+            color = attrs.get("color", "")
+            micro = obj.get("micro_details", [])
+            pose = obj.get("pose_or_orientation", "")
+            micro_str = ", ".join(micro[:3]) if micro else ""
+            obj_descs.append(f"{label} ({loc}): {color}. {micro_str}. {pose}".strip(". "))
+
+        rels = ip.get("semantic_relationships", [])
+
+        parts = [
+            "2D digital illustration, animation frame.",
+            scene_desc,
+            f"{time_of_day}, {weather}." if time_of_day else "",
+            light_desc + ".",
+            f"{camera}, {framing}. Focal point: {focal}." if camera else "",
+        ]
+        parts += obj_descs
+        parts += rels
+        parts.append("Oversized cartoon heads, stick-figure bodies, thick black outlines, flat digital coloring.")
+
+        prompt = " ".join(p for p in parts if p.strip())
+
+    # Handle legacy flat string format
+    elif isinstance(ip, dict):
+        prompt = ip.get("prompt", "")
+    else:
+        prompt = str(ip) if ip else ""
+
+    if not prompt:
+        # Last resort: strip beats from video prompt
+        vp = scene.get("video_prompt", {})
+        vp_text = vp.get("prompt", "") if isinstance(vp, dict) else str(vp)
+        prompt = re.sub(r'\[\d+\.\d+s-\d+\.\d+s\][^\[]*', '', vp_text).strip()
+
     if not prompt:
         return ""
+
     if simplified:
         prompt = _simplify_prompt(prompt)
-    if style_prefix and not prompt.lower().startswith(style_prefix.lower()[:20]):
-        prompt = f"{style_prefix}. {prompt}"
-    if char_context:
-        prompt = f"{char_context}. {prompt}"
+
     return prompt[:947] + "..." if len(prompt) > 950 else prompt
 
 

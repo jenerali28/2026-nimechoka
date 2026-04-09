@@ -191,7 +191,44 @@ def main():
     for i, scene in enumerate(scenes, 1):
         scene_num = scene.get("scene_number", i)
         img_prompt_data = scene.get("image_prompt", {})
-        prompt_text = img_prompt_data.get("prompt", "") if isinstance(img_prompt_data, dict) else str(img_prompt_data)
+
+        # Handle structured JSON format (new format) or legacy flat string
+        if isinstance(img_prompt_data, dict) and "global_context" in img_prompt_data:
+            # Flatten structured prompt to string
+            gc = img_prompt_data.get("global_context", {})
+            scene_desc = gc.get("scene_description", "")
+            time_of_day = gc.get("time_of_day", "")
+            weather = gc.get("weather_atmosphere", "")
+            lighting = img_prompt_data.get("global_context", {}).get("lighting", {})
+            light_desc = f"{lighting.get('quality','')} {lighting.get('source','')} lighting"
+            comp = img_prompt_data.get("composition", {})
+            camera = comp.get("camera_angle", "")
+            framing = comp.get("framing", "")
+            focal = comp.get("focal_point", "")
+            objects = img_prompt_data.get("objects", [])
+            obj_descs = []
+            for obj in objects:
+                label = obj.get("label", "")
+                loc = obj.get("location", "")
+                attrs = obj.get("visual_attributes", {})
+                color = attrs.get("color", "")
+                micro = obj.get("micro_details", [])
+                pose = obj.get("pose_or_orientation", "")
+                micro_str = ", ".join(micro[:3]) if micro else ""
+                obj_descs.append(f"{label} ({loc}): {color}. {micro_str}. {pose}".strip(". "))
+            rels = img_prompt_data.get("semantic_relationships", [])
+            parts = [
+                "2D digital illustration, animation frame.",
+                scene_desc,
+                f"{time_of_day}, {weather}." if time_of_day else "",
+                light_desc + ".",
+                f"{camera}, {framing}. Focal point: {focal}." if camera else "",
+            ] + obj_descs + rels + [
+                "Oversized cartoon heads, stick-figure bodies, thick black outlines, flat digital coloring."
+            ]
+            prompt_text = " ".join(p for p in parts if p.strip())
+        else:
+            prompt_text = img_prompt_data.get("prompt", "") if isinstance(img_prompt_data, dict) else str(img_prompt_data)
 
         if not prompt_text:
             print(f"[{i}/{len(scenes)}] Scene {scene_num}: ⚠ No prompt found.")
