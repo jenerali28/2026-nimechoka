@@ -22,6 +22,9 @@ import json
 import yaml
 from pathlib import Path
 
+# Add project root to path so `utils.*` imports work regardless of cwd
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 # Add Gemini-API-New to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "Gemini-API-New" / "src"))
 
