@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 """
-Script Rewriter — Rewrite English script to Spanish via NVIDIA NIM (DeepSeek V3.1).
+Script Rewriter — Rewrite English script to Spanish via Gemini WebUI.
 
-Takes an English transcript and uses NVIDIA NIM's DeepSeek V3.1 model
-to rewrite it into a fresh Spanish script.
+Takes an English transcript and uses Gemini to rewrite it into a fresh Spanish script.
 """
 
 import argparse
+import asyncio
 import os
 import re
 import sys
-import time
 from pathlib import Path
-from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Add Gemini-API-New to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "Gemini-API-New" / "src"))
+from gemini_webapi import GeminiClient
+from gemini_webapi.constants import Model
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-NVIDIA_API_KEY = "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"
-NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_MODEL = "deepseek-ai/deepseek-v3.1"
 DEFAULT_OUTPUT = "outputs/script/spanish_script.txt"
 
 REWRITE_SYSTEM_PROMPT = """\
@@ -81,67 +85,59 @@ def load_english_script(path: Path) -> str:
         result = raw
     return result
 
-def rewrite_to_spanish(english_text: str, model: str) -> str:
-    """Send the English script to NVIDIA NIM for Spanish rewriting using DeepSeek V3.1."""
-    client = OpenAI(
-        base_url=NVIDIA_BASE_URL,
-        api_key=NVIDIA_API_KEY,
-        timeout=300.0,  # 5 min timeout for large scripts
-    )
 
-    print(f"  Sending request to NVIDIA NIM ({model})...")
+async def rewrite_to_spanish(english_text: str, client: GeminiClient) -> str:
+    """Send the English script to Gemini for Spanish rewriting."""
+    
     print(f"  Script size: {len(english_text)} chars (~{len(english_text)//4} tokens)")
     print("  Waiting for Spanish rewrite...")
 
-    messages = [
-        {"role": "system", "content": REWRITE_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Here is the English video script to rewrite into Spanish:\n\n---\n{english_text}\n---\n\nRewrite this script in Spanish following all the rules. Output ONLY the Spanish script text, nothing else."}
-    ]
+    prompt = f"""{REWRITE_SYSTEM_PROMPT}
 
-    # Retry up to 3 times with backoff
+Here is the English video script to rewrite into Spanish:
+
+---
+{english_text}
+---
+
+Rewrite this script in Spanish following all the rules. Output ONLY the Spanish script text, nothing else."""
+
+    # Retry up to 3 times
     max_retries = 3
     for attempt in range(1, max_retries + 1):
-        start = time.time()
         try:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.2,
-                top_p=0.7,
-                max_tokens=16384,
-                stream=False,
-            )
-
-            content = completion.choices[0].message.content
-            elapsed = time.time() - start
-            print(f"  Response received in {elapsed:.1f}s")
-
+            chat = client.start_chat(model=Model.G_3_0_FLASH)
+            response = await chat.send_message(prompt)
+            
+            content = response.text.strip()
+            
             # Clean up any markdown fences
-            content = content.strip()
             content = re.sub(r"^```\w*\s*\n?", "", content)
             content = re.sub(r"\n?```\s*$", "", content)
+            
+            print(f"  ✅ Response received")
             return content.strip()
 
         except Exception as e:
-            elapsed = time.time() - start
-            print(f"\n  ⚠ Attempt {attempt}/{max_retries} failed after {elapsed:.1f}s: {e}")
+            print(f"\n  ⚠ Attempt {attempt}/{max_retries} failed: {e}")
             if attempt < max_retries:
                 wait = 10 * attempt
                 print(f"  Retrying in {wait}s...")
-                time.sleep(wait)
+                await asyncio.sleep(wait)
             else:
-                print(f"\nError: NVIDIA API call failed after {max_retries} attempts.")
+                print(f"\n❌ Error: Gemini API call failed after {max_retries} attempts.")
                 sys.exit(1)
+
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="Rewrite English script to Spanish via NVIDIA NIM.")
+async def main_async():
+    parser = argparse.ArgumentParser(description="Rewrite English script to Spanish via Gemini.")
     parser.add_argument("english_script", type=str, help="Path to the English transcript file")
-    parser.add_argument("-o", "--output", type=str, default=DEFAULT_OUTPUT, help=f"Path to save (default: {DEFAULT_OUTPUT})")
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help=f"Model (default: {DEFAULT_MODEL})")
+    parser.add_argument("-o", "--output", type=str, default=DEFAULT_OUTPUT, 
+                        help=f"Path to save (default: {DEFAULT_OUTPUT})")
     parser.add_argument("--api-base", help="Ignored (signature compatibility)")
 
     args = parser.parse_args()
@@ -149,17 +145,35 @@ def main():
     output_path = Path(args.output).resolve()
 
     print("=" * 60)
-    print("  Script Rewriter — DeepSeek V3.1 @ NVIDIA NIM")
+    print("  Script Rewriter — Gemini WebUI")
     print("=" * 60)
 
+    # Initialize Gemini client with cookies from environment if available
+    secure_1psid = os.getenv("SECURE_1PSID")
+    secure_1psidts = os.getenv("SECURE_1PSIDTS")
+    
+    if secure_1psid and secure_1psidts:
+        client = GeminiClient(secure_1psid, secure_1psidts)
+        print("  🔐 Using Gemini cookies from environment variables")
+    else:
+        client = GeminiClient()
+        print("  🔐 Using Gemini cookies from browser (browser-cookie3)")
+    
+    await client.init(timeout=300, watchdog_timeout=120)
+
     english_text = load_english_script(script_path)
-    spanish_text = rewrite_to_spanish(english_text, args.model)
+    spanish_text = await rewrite_to_spanish(english_text, client)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(spanish_text, encoding="utf-8")
     
     print(f"\n✅ Spanish script ready! ({len(spanish_text)} chars)")
     print(f"   Saved to: {output_path}")
+
+
+def main():
+    asyncio.run(main_async())
+
 
 if __name__ == "__main__":
     main()

@@ -10,6 +10,12 @@ requests>=2.31.0
 # --- YAML parsing (analysis, prompts, configs) ---
 pyyaml>=6.0.1
 
+# --- Environment variables ---
+python-dotenv>=1.0.0
+
+# --- Gemini WebAPI (for visual prompt generation) ---
+gemini-webapi>=2.0.0
+
 # --- OpenAI Whisper (local speech-to-text for Step 1) ---
 openai-whisper>=20240930
 edge-tts>=6.1.12

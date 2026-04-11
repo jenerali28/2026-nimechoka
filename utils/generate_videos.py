@@ -42,10 +42,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
 DEFAULT_OUTPUT_DIR = "outputs/clips"
-DEFAULT_GROK_API_BASE = os.environ.get("GROK_API_BASE", "http://localhost:8000")
+DEFAULT_GROK_API_BASE = os.environ.get("GROK_API_BASE", "http://localhost:8001")  # Changed port
 DEFAULT_API_KEY = os.environ.get("GROK_API_KEY", "grok2api")
 
-VIDEO_CLIP_MINUTES = 3      # first N minutes of narration get real video clips
+VIDEO_CLIP_MINUTES = 999999  # Generate videos for ALL scenes (no image fallback)
 MAX_RETRIES = 5             # per-scene attempts in the main pass
 RETRY_ROUNDS = 3            # extra rounds after main pass for still-missing scenes
 MIN_CLIP_FRACTION = 0.6     # minimum coverage required before assembly is allowed
@@ -95,44 +95,62 @@ def extract_character_context(prompts_data: dict) -> str:
 
 def _simplify_prompt(raw: str) -> str:
     """Strip timestamped beats and trim length for retry attempts."""
-    p = re.sub(r'\[\d+\.\d+s-\d+\.\d+s\][^\[]*', '', raw).strip()
+    p = re.sub(r'\[\d+s-\d+s\][^\[]*', '', raw).strip()
+    p = re.sub(r'\[\d+\.\d+s-\d+\.\d+s\][^\[]*', '', p).strip()
     p = re.sub(r'\s+', ' ', p)
     return p[:397] + "..." if len(p) > 400 else p
 
 
 def build_video_prompt(scene: dict, style_prefix: str, char_context: str,
                        simplified: bool = False) -> str:
-    """Flatten the structured video_prompt JSON into a string for the Grok video API.
+    """Return the video prompt string for this scene.
 
-    The structured prompt has action_beats with time ranges and camera motion.
-    We serialize it into a natural-language string that video models understand.
-    Character appearance is NOT re-injected here — it's locked by the image.
+    Prompts are now plain natural-language strings with timed motion beats
+    already embedded by the orchestrator. Just return the string directly.
+    Legacy structured JSON formats are also handled for backwards compatibility.
     """
-    vp = scene.get("video_prompt", {})
+    vp = scene.get("video_prompt", "")
 
-    # Handle structured JSON format (new format from generate_visuals.py)
-    if isinstance(vp, dict) and "action_beats" in vp:
+    # New format: plain string
+    if isinstance(vp, str) and vp.strip():
+        prompt = vp.strip()
+
+    # Legacy structured JSON with animation block
+    elif isinstance(vp, dict) and ("animation" in vp or "action_beats" in vp):
         meta = vp.get("meta", {})
-        style = meta.get("style", "2D animation, flat illustration, stick-figure characters with oversized cartoon heads")
+        style = meta.get("style", "crude minimalist cartoon, MS Paint style, stick-figure characters with oversized cartoon faces")
         gc = vp.get("global_context", {})
         scene_desc = gc.get("scene_description", "")
-        cam = vp.get("camera_motion", {})
-        primary_move = cam.get("primary_move", "static")
-        beats = vp.get("action_beats", [])
+        anim = vp.get("animation", vp)
+        cam = anim.get("camera_motion", {})
+        primary_move = cam.get("primary_move", "Static")
+        beats = anim.get("action_beats", [])
+        objects = vp.get("objects", [])
 
-        parts = [f"{style}."]
-        if scene_desc:
-            parts.append(scene_desc)
+        obj_parts = []
+        for obj in objects:
+            label = obj.get("label", "")
+            action = obj.get("action", "")
+            micro = obj.get("micro_details", [])
+            micro_str = "; ".join(micro[:2]) if micro else ""
+            if label and action:
+                obj_parts.append(f"{label} ({micro_str}): {action}.")
+
+        parts = [f"STYLE: {style}.", f"SCENE: {scene_desc}"]
+        if obj_parts:
+            parts.append("OBJECTS: " + " | ".join(obj_parts))
         for beat in beats:
             tr = beat.get("time_range", "")
             action = beat.get("action", "")
             camera = beat.get("camera", "")
             if tr and action:
                 parts.append(f"[{tr}] {action}. {camera}." if camera else f"[{tr}] {action}.")
-        parts.append(f"Camera: {primary_move}.")
+        parts.append(f"CAMERA: {primary_move}.")
+        neg = vp.get("negative_prompt", "")
+        if neg:
+            parts.append(f"negative: {neg}")
         prompt = " ".join(parts)
 
-    # Handle legacy flat string format
     elif isinstance(vp, dict):
         prompt = vp.get("prompt", "")
     else:
@@ -140,10 +158,12 @@ def build_video_prompt(scene: dict, style_prefix: str, char_context: str,
 
     if not prompt:
         prompt = (
-            "2D animation, flat illustration, stick-figure characters with oversized cartoon heads. "
-            "[0.0s-2.5s] Scene opens, character stands still, ambient wind moves background. "
-            "[2.5s-4.5s] Slow camera push-in, character slowly turns head. "
-            "[4.5s-6.0s] Camera holds, scene settles."
+            "crude minimalist cartoon, MS Paint style, stick-figure characters with oversized cartoon faces, "
+            "flat colors, thick black outlines. "
+            "[0s-2s] Scene opens, character stands still, ambient environment motion. "
+            "[2s-4s] Slow camera push-in, character turns head. "
+            "[4s-6s] Camera holds, scene settles. "
+            "negative: photorealistic, 3D render, CGI, watermark, blurry, collage"
         )
 
     if simplified:
@@ -154,65 +174,46 @@ def build_video_prompt(scene: dict, style_prefix: str, char_context: str,
 
 def build_image_prompt(scene: dict, style_prefix: str, char_context: str,
                        simplified: bool = False) -> str:
-    """Flatten the structured image_prompt JSON into a string for the image API.
+    """Return the image prompt string for this scene.
 
-    The structured prompt has objects array, composition, global_context, etc.
-    We serialize it into a natural-language description that image models understand.
+    Prompts are now plain natural-language strings generated by the orchestrator.
+    Legacy structured JSON formats are also handled for backwards compatibility.
     """
-    ip = scene.get("image_prompt", {})
+    ip = scene.get("image_prompt", "")
 
-    # Handle structured JSON format (new format from generate_visuals.py)
-    if isinstance(ip, dict) and "global_context" in ip:
+    # New format: plain string
+    if isinstance(ip, str) and ip.strip():
+        prompt = ip.strip()
+
+    # Legacy structured JSON format
+    elif isinstance(ip, dict) and "global_context" in ip:
         gc = ip.get("global_context", {})
-        scene_desc = gc.get("scene_description", "")
-        time_of_day = gc.get("time_of_day", "")
-        weather = gc.get("weather_atmosphere", "")
-        lighting = gc.get("lighting", {})
-        light_desc = f"{lighting.get('quality','')} {lighting.get('source','')} lighting, {lighting.get('color_temp','')} color temperature"
-
-        comp = ip.get("composition", {})
-        camera = comp.get("camera_angle", "")
-        framing = comp.get("framing", "")
-        focal = comp.get("focal_point", "")
-
+        desc = gc.get("scene_description", "")
         objects = ip.get("objects", [])
-        obj_descs = []
+        obj_parts = []
         for obj in objects:
             label = obj.get("label", "")
-            loc = obj.get("location", "")
-            attrs = obj.get("visual_attributes", {})
-            color = attrs.get("color", "")
             micro = obj.get("micro_details", [])
-            pose = obj.get("pose_or_orientation", "")
-            micro_str = ", ".join(micro[:3]) if micro else ""
-            obj_descs.append(f"{label} ({loc}): {color}. {micro_str}. {pose}".strip(". "))
-
-        rels = ip.get("semantic_relationships", [])
-
-        parts = [
-            "2D digital illustration, animation frame.",
-            scene_desc,
-            f"{time_of_day}, {weather}." if time_of_day else "",
-            light_desc + ".",
-            f"{camera}, {framing}. Focal point: {focal}." if camera else "",
-        ]
-        parts += obj_descs
-        parts += rels
-        parts.append("Oversized cartoon heads, stick-figure bodies, thick black outlines, flat digital coloring.")
-
+            if label and micro:
+                obj_parts.append(f"{label}: {'; '.join(micro[:2])}")
+        neg = ip.get("negative_prompt", "")
+        parts = [desc] + obj_parts
+        if neg:
+            parts.append(f"negative: {neg}")
         prompt = " ".join(p for p in parts if p.strip())
 
-    # Handle legacy flat string format
     elif isinstance(ip, dict):
         prompt = ip.get("prompt", "")
     else:
         prompt = str(ip) if ip else ""
 
     if not prompt:
-        # Last resort: strip beats from video prompt
-        vp = scene.get("video_prompt", {})
-        vp_text = vp.get("prompt", "") if isinstance(vp, dict) else str(vp)
-        prompt = re.sub(r'\[\d+\.\d+s-\d+\.\d+s\][^\[]*', '', vp_text).strip()
+        vp = scene.get("video_prompt", "")
+        if isinstance(vp, str):
+            prompt = re.sub(r'\[\d+s-\d+s\][^\[]*', '', vp).strip()
+            prompt = re.sub(r'\[\d+\.\d+s-\d+\.\d+s\][^\[]*', '', prompt).strip()
+        elif isinstance(vp, dict):
+            prompt = vp.get("prompt", "")
 
     if not prompt:
         return ""
@@ -220,7 +221,7 @@ def build_image_prompt(scene: dict, style_prefix: str, char_context: str,
     if simplified:
         prompt = _simplify_prompt(prompt)
 
-    return prompt[:947] + "..." if len(prompt) > 950 else prompt
+    return prompt[:3900] + "..." if len(prompt) > 3900 else prompt
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +455,35 @@ def generate_scene(scene: dict, out_path: Path, use_video: bool,
 # Main
 # ---------------------------------------------------------------------------
 
+def load_progress(output_dir: Path) -> dict:
+    """Load progress tracking file if it exists."""
+    progress_file = output_dir.parent / "video_generation_progress.json"
+    if progress_file.exists():
+        try:
+            return json.loads(progress_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  ⚠ Could not load progress file: {e}")
+    return {"completed_scenes": [], "failed_scenes": [], "next_scene_to_generate": 1}
+
+
+def save_progress(output_dir: Path, completed: list, failed: list, next_scene: int, total: int):
+    """Save progress tracking file."""
+    progress_file = output_dir.parent / "video_generation_progress.json"
+    data = {
+        "project_name": output_dir.parent.name,
+        "total_scenes": total,
+        "completed_scenes": sorted(completed),
+        "failed_scenes": sorted(failed),
+        "next_scene_to_generate": next_scene,
+        "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "notes": f"Progress: {len(completed)}/{total} completed, {len(failed)} failed"
+    }
+    try:
+        progress_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"  ⚠ Could not save progress: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate video clips via Grok2API.")
@@ -462,8 +492,11 @@ def main():
     parser.add_argument("--grok-api-base", default=DEFAULT_GROK_API_BASE)
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--retries", type=int, default=MAX_RETRIES)
-    parser.add_argument("--video-minutes", type=float, default=VIDEO_CLIP_MINUTES)
     parser.add_argument("--aspect-ratio", default="16:9")
+    parser.add_argument("--start-from", type=int, default=None,
+                        help="Start from specific scene number (overrides progress file)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from last checkpoint in progress file")
     # BWC args silently ignored
     for bwc in ["--images-dir", "--meta-api-base", "--cookies-file",
                 "--timeout", "--video-length", "--model", "--resolution", "--analysis-file"]:
@@ -480,15 +513,16 @@ def main():
 
     api_base = args.grok_api_base
     api_key = args.api_key
-    video_cutoff = args.video_minutes * 60
+    # Force video-only mode (no image generation)
+    video_cutoff = 999999 * 60  # Effectively infinite - always use video
 
     print("=" * 60)
     print("  Video Generator — Grok2API")
     print("=" * 60)
     print(f"  API      : {api_base}")
     print(f"  Output   : {output_dir}")
-    print(f"  Video    : first {args.video_minutes:.1f} min of narration")
-    print(f"  Zoom     : remaining narration (Ken Burns)")
+    print(f"  Mode     : VIDEO ONLY (no image generation)")
+    print(f"  Note     : All scenes will be generated as videos")
 
     prompts_data = load_prompts_file(prompts_path)
     scenes = prompts_data.get("scenes", [])
@@ -498,9 +532,21 @@ def main():
     style_prefix = f"{visual_style}, {style_sub}" if visual_style and style_sub else visual_style
     char_context = extract_character_context(prompts_data)
 
+    # Load progress and determine starting point
+    progress = load_progress(output_dir)
+    start_scene = 1
+    
+    if args.start_from:
+        start_scene = args.start_from
+        print(f"  Start    : Scene {start_scene} (manual override)")
+    elif args.resume:
+        start_scene = progress.get("next_scene_to_generate", 1)
+        completed = progress.get("completed_scenes", [])
+        print(f"  Resume   : Scene {start_scene} ({len(completed)} already completed)")
+    
     if char_context:
         print(f"  Chars    : {char_context[:80]}...")
-    print(f"  Scenes   : {total}")
+    print(f"  Scenes   : {total} (generating {start_scene}-{total})")
     print("-" * 60)
 
     manifest = load_chunk_manifest(output_dir)
@@ -510,17 +556,26 @@ def main():
     scene_by_num = {s.get("scene_number", i + 1): s for i, s in enumerate(scenes)}
 
     zoom_toggle = True
+    completed_scenes = progress.get("completed_scenes", [])
+    failed_scenes = progress.get("failed_scenes", [])
 
     # -----------------------------------------------------------------------
-    # Main pass — iterate every scene
+    # Main pass — iterate every scene starting from checkpoint
     # -----------------------------------------------------------------------
     print("\n  [PASS 1] Main generation pass...")
     for i, scene in enumerate(scenes, 1):
         scene_num = scene.get("scene_number", i)
+        
+        # Skip scenes before start_scene
+        if scene_num < start_scene:
+            continue
+            
         out_path = output_dir / f"clip_{scene_num:02d}.mp4"
 
         if out_path.exists() and out_path.stat().st_size > 1024:
             print(f"\n  [{i}/{total}] Scene {scene_num}: ✓ Already exists")
+            if scene_num not in completed_scenes:
+                completed_scenes.append(scene_num)
             zoom_toggle = not zoom_toggle  # keep toggle in sync
             continue
 
@@ -541,10 +596,27 @@ def main():
             zoom_in=zoom_toggle,
             simplified=False,
         )
-        if not ok:
+        
+        if ok:
+            if scene_num not in completed_scenes:
+                completed_scenes.append(scene_num)
+            if scene_num in failed_scenes:
+                failed_scenes.remove(scene_num)
+        else:
             print(f"    ✗ Scene {scene_num} failed main pass.")
+            if scene_num not in failed_scenes:
+                failed_scenes.append(scene_num)
+        
+        # Save progress after each scene
+        next_scene = scene_num + 1 if scene_num < total else total
+        save_progress(output_dir, completed_scenes, failed_scenes, next_scene, total)
+        
         if not use_video:
             zoom_toggle = not zoom_toggle
+        
+        # Add delay between scenes to avoid rate limiting
+        if i < total:  # Don't delay after the last scene
+            time.sleep(60)  # 60 second delay between requests (1 per minute)
 
     # -----------------------------------------------------------------------
     # Retry rounds — only for scenes still missing after the main pass

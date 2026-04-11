@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """
-Gemini Multimodal Orchestrator — Adaptive Analysis + Batched Prompt Engineering.
+Gemini Multimodal Orchestrator — Natural Language Prompt Generation.
 
-Short videos (≤90s):
-  Turn 1: Analyze the full video with SEALCaM → YAML
-  Then: Batched prompt generation (segments of script → prompts)
+Generates plain natural-language prompts (not JSON schemas) for both
+image and video generation, matching the style of hand-crafted prompts
+like early 2000s webcomic / MS Paint aesthetic descriptions.
 
-Long videos (>90s):
-  Turn 1: Analyze the PREVIEW clip (first 60s) with SEALCaM → YAML
-  Turn 2: Reconstruct remaining scenes from transcript + visual patterns
-  Then: Batched prompt generation (segments of script → prompts)
-
-Key Design: Prompts are generated in batches of ~8 scenes, each in a
-separate Gemini call with the full style context. This ensures ALL scenes
-get generated reliably — no single call needs to produce 100+ scenes.
+Flow:
+  1. Extract character profiles from script (culturally authentic, style-locked)
+  2. Build a style anchor string from the character profiles
+  3. Generate image prompts: style anchor + scene description + characters + environment
+  4. Generate video prompts: same as image + motion beats appended
 """
 
 import asyncio
@@ -24,215 +21,222 @@ import sys
 import json
 import yaml
 from pathlib import Path
+
+# Add Gemini-API-New to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "Gemini-API-New" / "src"))
+
 from gemini_webapi import GeminiClient
 from gemini_webapi.constants import Model
+from dotenv import load_dotenv
+
+# Import story context enhancement
+from utils.enhance_prompts import enhance_prompts
+
+# Load environment variables
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Gemini Client
 # ---------------------------------------------------------------------------
 
-client = GeminiClient()
+# Initialize with cookies from environment variables if available
+secure_1psid = os.getenv("SECURE_1PSID")
+secure_1psidts = os.getenv("SECURE_1PSIDTS")
 
+PLACEHOLDERS = ["YOUR_SECURE_1PSID_VALUE_HERE", "YOUR_SECURE_1PSIDTS_VALUE_HERE"]
+
+if secure_1psid and secure_1psidts and secure_1psid not in PLACEHOLDERS and secure_1psidts not in PLACEHOLDERS:
+    client = GeminiClient(secure_1psid, secure_1psidts)
+    print("  🔐 Using Gemini cookies from environment variables")
+else:
+    client = GeminiClient()
+    print("  🔐 Using Gemini cookies from browser (browser-cookie3)")
 
 # ---------------------------------------------------------------------------
-# Prompts
+# Style context saved to analysis.yaml for downstream compatibility
 # ---------------------------------------------------------------------------
 
-ANALYSIS_PROMPT = """\
-Analyze this video until the VERY LAST FRAME.
-Break it down into distinct chronological scenes.
-Describe ONLY the visual action and environment. Do NOT mention text overlays, subtitles, labels, or UI elements.
+STYLE_CONTEXT = {
+    "visual_style": "2D Illustration",
+    "style_subcategory": "Big cartoon heads, stick-figure bodies",
+    "animation_complexity": "moderate",
+    "color_palette": "vibrant digital colors",
+    "rendering_style": "flat digital ink, thick black outlines",
+}
 
-CRITICAL — VISUAL MEDIUM DETECTION:
-First, determine the overall visual medium/style of this video. Be as specific as possible. Options include:
-- "3D animation" (CGI, Blender/C4D style, stylized characters, smooth surfaces)
-- "2D animation" (flat, cartoon, motion graphics, hand-drawn)
-- "stick figure animation" (simple line-drawn characters, minimal detail)
-- "motion graphics" (geometric shapes, kinetic typography, infographic-style)
-- "screen recording" (software UI, desktop capture)
-- "realistic" (live-action footage, real photography, documentary)
-- "photorealistic CGI" (CGI that mimics real photography)
-- "stop motion" (claymation, paper cutout, physical object animation)
-- "mixed media" (combination of styles)
-State this ONCE as the top-level `visual_style` field.
+# ---------------------------------------------------------------------------
+# The style anchor injected into every prompt — matches the working example
+# ---------------------------------------------------------------------------
 
-Also provide:
-- `style_subcategory`: A more specific label (e.g. "cel-shaded anime", "Pixar-style CGI", "whiteboard animation", "gopro footage", "drone aerial", "2D explainer")
-- `animation_complexity`: One of "simple" (stick figures, basic shapes, flat colors), "moderate" (stylized 3D, clean 2D with shading), or "complex" (photorealistic, high-detail textures, realistic lighting)
+STYLE_ANCHOR = (
+    "crude minimalist cartoon in the style of early 2000s internet webcomics and MS Paint drawings, "
+    "stick-figure bodies with detached oversized cartoon faces, highly detailed expressive faces with "
+    "wrinkles and heavy eyelids on simple stick bodies, flat colors, simple black outlines, "
+    "lazy and unrefined drawing style, low detail backgrounds, meme-like aesthetic, "
+    "slightly off proportions, humorous vibe, cartoonish and amateurish look like old Newgrounds "
+    "or Something Awful comics"
+)
 
-CRITICAL — PRECISION DESCRIPTIONS:
-Your descriptions MUST be precise enough to recreate each frame exactly.
-For each scene, describe:
-- EXACT colors (not "blue" but "bright cerulean blue" or "deep navy")
-- EXACT positions and compositions (what's on the left, right, center, foreground, background)
-- EXACT shapes, sizes, and proportions of all objects
-- EXACT textures and materials (smooth, rough, glossy, matte, translucent)
-- The EXACT visual perspective and framing
+IMAGE_NEGATIVE = (
+    "photorealistic, 3D render, CGI, anime, chibi, realistic body proportions, muscular, "
+    "detailed hands, watermark, text overlay, subtitle, blurry, low quality, "
+    "multiple panels, collage, grid layout, split screen, photo montage"
+)
 
-Output the result as valid YAML with these top-level fields:
-- visual_style: the detected medium
-- style_subcategory: more specific label
-- animation_complexity: "simple", "moderate", or "complex"
-- color_palette: dominant colors and mood (e.g. "vibrant blues, clean whites, bright saturated colors")
-- rendering_style: specific rendering details (e.g. "smooth plastic-like surfaces, soft shadows, stylized proportions")
-- audio: brief audio mood description
+VIDEO_NEGATIVE = (
+    "photorealistic, 3D render, CGI, watermark, text, subtitle, blurry, low quality, "
+    "multiple panels, split screen, collage, static image, same expression every scene"
+)
 
-And for each scene:
-- scene_number, timestamp, duration
-- description: HIGHLY detailed objective description — enough to perfectly recreate the frame
-- subject: main element in focus (describe its exact appearance)
-- environment: background/setting with exact colors and details
-- action: specific movement occurring (describe simply and literally)
-- lighting: lighting conditions only (e.g. "bright studio lighting", "warm golden hour")
-- camera: camera perspective and movement
-- key_colors: list of the 3-5 most prominent hex color codes visible in this scene
+# ---------------------------------------------------------------------------
+# Character profile prompt
+# ---------------------------------------------------------------------------
 
-Also identify RECURRING CHARACTERS or subjects:
-- recurring_characters: a top-level list of characters/subjects that appear in multiple scenes.
-  For each, provide: name, visual_description (detailed enough to recreate consistently),
-  and scenes_appeared_in (list of scene numbers).
-"""
+CHARACTER_PROFILE_PROMPT = """\
+You are a Character Designer for a crude minimalist cartoon series.
 
-RECONSTRUCTION_PROMPT = """\
-You previously analyzed the FIRST {preview_duration} seconds of a {total_duration:.0f}-second video.
-That analysis captured {analyzed_scene_count} scenes covering timestamps 00:00 through ~{preview_end}.
+ART STYLE (mandatory for all characters):
+- Body: thin black stick figure — lines only, no muscle, no bulk
+- Head: OVERSIZED detached cartoon face (~40% of total figure height)
+- Face: highly detailed and expressive — wrinkles, prominent nose, heavy eyelids
+- Rendering: flat colors, thick black outlines, MS Paint / early 2000s webcomic aesthetic
+- Characters MUST be culturally authentic to the story's setting
 
-Now I need you to RECONSTRUCT the remaining scenes (from ~{preview_end} to the end) using:
+CULTURAL AUTHENTICITY RULES:
+- Ancient Egyptian: dark olive/brown skin, kohl-lined eyes, white linen shendyt or dress, gold jewelry, sandals
+- Viking Norse: pale skin, braided blonde/red hair, fur-trimmed tunic, horned or iron helmet, boots
+- Han Dynasty Chinese: light skin, black topknot hair, silk hanfu robes, jade accessories
+- Medieval European: pale skin, rough wool tunic, leather belt, simple boots
+- Adapt EVERYTHING to the story's culture and time period
 
-1. **The visual style and patterns** you observed in the first segment — the reconstructed scenes
-   MUST follow the EXACT SAME:
-   - Visual style: {visual_style}
-   - Style subcategory: {style_subcategory}
-   - Animation complexity: {animation_complexity}
-   - Color palette: {color_palette}
-   - Rendering style: {rendering_style}
-   - Scene composition patterns (how subjects are framed, how backgrounds work, typical camera angles)
-   - Scene transition flow (how scenes progress and connect to each other)
+SCRIPT:
+{script_text}
 
-2. **The full transcript** of what the narrator says throughout the ENTIRE video:
-
----
-{transcript}
----
-
-CRITICAL RULES:
-- Each reconstructed scene MUST look like it belongs in the same video as the analyzed scenes.
-- Use the transcript to determine WHAT is being shown at each moment — the narrator describes
-  or references what's on screen.
-- Maintain the same pacing and scene duration patterns from the analyzed segment.
-- Continue scene numbering from {next_scene_number}.
-- Each scene should cover roughly the same duration as scenes in the analyzed segment.
-- Describe subjects, environments, actions, lighting, and camera with the SAME level of
-  precision and the SAME visual language as your original analysis.
-
-Output ONLY the new scenes as valid YAML (a list under `scenes:`), continuing from scene {next_scene_number}.
-Use the exact same field structure as the original analysis.
-Do NOT repeat the global style fields — only output the new scenes.
-"""
-
-# Prompt for batched scene generation — given style context + script segments
-# Generates RICH text-to-video prompts with TIMESTAMPED ACTION CHOREOGRAPHY
-BATCH_PROMPT = """\
-You are an expert Prompt Engineer for AI video generation. I'll give you:
-1. A VIDEO STYLE CONTEXT describing the visual style of a video
-2. A set of SCRIPT SEGMENTS — each segment is narration for one 6-second video clip
-
-For EACH segment, generate a RICH text-to-video prompt with TIMESTAMPED ACTION CHOREOGRAPHY.
-This is critical — a 6-second video needs specific actions choreographed across the full
-duration, or the AI will fill empty time with random weird movements (waving, fidgeting, etc).
-
-VIDEO STYLE CONTEXT:
-- Visual style: {visual_style}
-- Style subcategory: {style_subcategory}
-- Animation complexity: {animation_complexity}
-- Color palette: {color_palette}
-- Rendering style: {rendering_style}
-{character_context}
-
-⚠️ CHARACTER CONSISTENCY RULE (CRITICAL):
-Every scene MUST feature the EXACT SAME character(s) described above.
-- Same gender, body type, skin tone, hair, clothing in EVERY scene.
-- Do NOT introduce new characters or change existing ones between scenes.
-- If the character is male, keep them male in ALL scenes. If female, keep female in ALL.
-- Describe the character's appearance explicitly in EVERY prompt so the AI doesn't drift.
-
-SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
-{segments_text}
-
-For EACH segment above, generate:
-
-**Video Prompt (MUST include timestamped choreography):**
-
-Structure your prompt EXACTLY like this:
-
-PART 1 — SCENE SETUP (1-2 sentences):
-- Style: "{visual_style}, {style_subcategory}."
-- Subject appearance (clothing, colors, features — be specific and IDENTICAL to other scenes)
-- Environment/setting (background, spatial layout, materials, atmosphere)
-- Lighting and color mood
-
-PART 2 — TIMESTAMPED ACTION CHOREOGRAPHY (2-3 beats covering FULL 6 seconds):
-Break the 6 seconds into timed action beats. Each beat describes EXACTLY what happens
-during that time window. This prevents the AI from inventing random filler movements.
-
-Format each beat as: "[X.0s-Y.0s] description of action"
-
-Example beats for a 6-second clip:
-  "[0.0s-2.5s] The emperor stands still on his throne, gazing down with a stern expression. Camera: slow push-in from wide shot."
-  "[2.5s-4.5s] He slowly raises his right hand and gestures dismissively. A servant in the background bows deeply."
-  "[4.5s-6.0s] The emperor's expression softens slightly. He turns his head to the left. Camera holds steady, close-up."
-
-Rules for action beats:
-- COVER THE FULL 6 SECONDS — no gaps!
-- Keep movements SLOW and DELIBERATE — AI handles subtle motion better than fast action
-- Describe ONE specific action per beat (not multiple simultaneous actions)
-- Include camera movement in at least one beat
-- Movements should be physically plausible and natural
-- Prefer: gazing, walking slowly, turning head, gesturing, leaning, reaching, nodding
-- AVOID: waving, dancing, jumping, running, fighting (these create artifacts)
-
-PART 3 — QUALITY TAG:
-End with: "Cinematic quality, smooth natural motion, 24fps, hyper-detailed, no artifacts, no jitter."
-
-**Negative Prompt:**
-{negative_instructions}
-
-OUTPUT: A single valid JSON object:
+OUTPUT FORMAT — return ONLY this JSON:
 {{
-  "scenes": [
+  "characters": [
     {{
-      "scene_number": {start_num},
-      "spanish_script": "(the script segment text)",
-      "image_prompt": {{
-         "prompt": "(same scene description without timestamps — kept for compatibility)",
-         "negative_prompt": "...",
-         "aspect_ratio": "16:9"
-      }},
-      "video_prompt": {{
-         "prompt": "(FULL prompt: scene setup + [0.0s-2.5s] beat 1 + [2.5s-4.5s] beat 2 + [4.5s-6.0s] beat 3 + quality tag)",
-         "duration": "6s",
-         "camera_motion": "(primary camera movement used)"
+      "name": "...",
+      "role": "...",
+      "cultural_context": "...",
+      "appearance_anchor": "thin black stick figure, [hair], detached [skin color] face, [1-2 key facial features], [clothing in 3-4 words]",
+      "visual_attributes": {{
+        "skin_tone": "...",
+        "hair": "...",
+        "eyes": "...",
+        "clothing": "...",
+        "accessories": "..."
       }}
     }}
   ]
 }}
 
-Generate EXACTLY {batch_size} scenes (one per segment). Return ONLY the JSON, no other text.
+CRITICAL: The "appearance_anchor" field MUST be SHORT — maximum 20 words.
+Focus on the 3-4 most distinctive visual traits only.
+
+GOOD EXAMPLES (use this brevity):
+- "thin black stick figure, long wavy brown hair, detached white face with bored half-closed eyes, simple black tunic"
+- "thin black stick figure, shaved head, detached dark brown face with bulging eyes, dazzling gold tunic"
+- "small thin black stick figure, side-lock hair, detached light brown face with piercing eyes, white kilt and striped headdress"
+
+BAD EXAMPLE (too long, too detailed):
+- "a thin black stick figure with long wavy dark hair and a detached oversized olive-skinned face with heavy kohl-lined eyelids, visible teeth in a tense grimace, and a prominent nose, wearing an elegant sheer white linen kalasiris and a heavy gold usekh collar"
+
+Keep it punchy. The model will infer the rest from the style anchor.
 """
 
+# ---------------------------------------------------------------------------
+# Image batch prompt
+# ---------------------------------------------------------------------------
+
+IMAGE_BATCH_PROMPT = """\
+You are a prompt writer for an AI image generator.
+Write one natural-language image prompt per script segment.
+
+STYLE (include this in every prompt — do not change it):
+{style_anchor}
+
+CHARACTER APPEARANCES (use these exact descriptions every time a character appears):
+{character_anchors}
+
+RULES:
+1. Each prompt is a single paragraph of natural language — NOT a JSON object, NOT bullet points.
+2. Start every prompt with the style anchor words, then describe the scene.
+3. Include the character's full appearance anchor phrase every time they appear.
+4. Describe the environment in detail: setting, time of day, weather, colors, background elements.
+5. Describe what the character is doing and their expression — match the script moment.
+6. Vary expressions scene to scene — do NOT default to angry/intense unless the script calls for it.
+7. End every prompt with the negative list: "negative: {negative}"
+8. ONE single scene per prompt — no collage, no split screen, no multiple panels.
+
+EXAMPLE of a good prompt (use this quality and style):
+"A crude minimalist cartoon in the style of early 2000s internet webcomics and MS Paint drawings, snowy forest scene, tall brown tree trunks with green foliage in the background, light blue snow on the ground. In the foreground: a tall thin black stick figure with long wavy brown hair and a detached white face with a bored half-closed eyes expression, standing and holding a curved brown branch. To the right, a small stick figure with messy brown hair and a wide grin is sitting in the snow holding a leash attached to a solid black goat with horns. Green bushes poking through the snow. Simple black outlines, flat colors, lazy unrefined drawing style, meme-like aesthetic, slightly off proportions, humorous dark humor vibe. negative: photorealistic, 3D render, CGI, anime, realistic body, watermark, text, blurry, collage, split screen"
+
+OUTPUT FORMAT — a JSON object with a "scenes" array:
+{{
+  "scenes": [
+    {{
+      "scene_number": 1,
+      "image_prompt": "full natural language prompt as a single string"
+    }}
+  ]
+}}
+
+SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
+{segments_text}
+
+Generate EXACTLY {batch_size} scenes. Return ONLY the JSON.
+"""
+
+# ---------------------------------------------------------------------------
+# Video batch prompt
+# ---------------------------------------------------------------------------
+
+VIDEO_BATCH_PROMPT = """\
+You are a prompt writer for an AI video generator (text-to-video, 6-second clips).
+Write one natural-language video prompt per script segment.
+
+STYLE (include this in every prompt):
+{style_anchor}
+
+CHARACTER APPEARANCES (use these exact descriptions — appearance is LOCKED across all clips):
+{character_anchors}
+
+RULES:
+1. Each prompt is a single paragraph of natural language — NOT JSON, NOT bullet points.
+2. Start with the style anchor, then describe the scene and characters (using their appearance anchors).
+3. Character appearance must be NEUTRAL — describe what they look like, not their emotional state.
+   WRONG: "the terrified protagonist with wide fearful eyes"
+   RIGHT: "the protagonist — tall thin black stick figure with dark messy hair and a detached tan face"
+4. After describing the scene, add motion: what physically moves during the 6 seconds.
+   Use this format: "[0s-2s] action. [2s-4s] action. [4s-6s] action."
+5. Include camera motion: static, slow push-in, pan left/right, slight zoom.
+6. Include environment motion: dust drifting, torch flickering, leaves falling, water rippling.
+7. End with: "negative: {negative}"
+8. ONE continuous clip — no collage, no split screen.
+
+EXAMPLE of a good video prompt:
+"A crude minimalist cartoon in the style of early 2000s internet webcomics, dusty ancient Egyptian courtyard, sandy brown floor with flat coloring, mud-brick walls in the background with simple rectangular brick pattern. The protagonist — a tall thin black stick figure with dark messy hair and a detached tan face — stands in the center holding a broom. [0s-2s] Protagonist sweeps broom left to right, small dust clouds puff up from the floor. [2s-4s] Protagonist slows down, stick shoulders slump slightly, dust drifts upward. [4s-6s] Protagonist stops sweeping and leans on the broom handle, dust settles. Camera static medium shot throughout. Simple black outlines, flat colors, MS Paint aesthetic. negative: photorealistic, 3D render, CGI, watermark, text, blurry, collage, split screen, same expression every scene"
+
+OUTPUT FORMAT — a JSON object with a "scenes" array:
+{{
+  "scenes": [
+    {{
+      "scene_number": 1,
+      "video_prompt": "full natural language prompt as a single string"
+    }}
+  ]
+}}
+
+SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
+{segments_text}
+
+Generate EXACTLY {batch_size} scenes. Return ONLY the JSON.
+"""
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _parse_yaml_block(text: str) -> str:
-    """Extract YAML content, stripping markdown fences if present."""
-    if "```yaml" in text:
-        return text.split("```yaml")[1].split("```")[0].strip()
-    elif "```" in text:
-        return text.split("```")[1].split("```")[0].strip()
-    return text.strip()
-
 
 def _parse_json_block(text: str) -> str:
     """Extract JSON content, stripping markdown fences if present."""
@@ -243,66 +247,12 @@ def _parse_json_block(text: str) -> str:
     return text.strip()
 
 
-def _load_transcript(transcript_path: str) -> str:
-    """Load the English transcript, stripping headers and timestamp sections."""
-    raw = Path(transcript_path).read_text(encoding="utf-8").strip()
-    lines = raw.splitlines()
-    text_lines = []
-    skip_timestamps = False
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            if "Timestamped" in stripped:
-                skip_timestamps = True
-            continue
-        if skip_timestamps:
-            if stripped:
-                text_lines.append(stripped)
-            continue
-        if stripped:
-            text_lines.append(stripped)
-
-    return "\n".join(text_lines).strip() if text_lines else raw
-
-
-def _merge_analysis_with_reconstructed(analysis_text: str, reconstructed_text: str) -> str:
-    """Merge the original partial analysis YAML with reconstructed scenes."""
-    try:
-        original = yaml.safe_load(analysis_text)
-        reconstructed = yaml.safe_load(reconstructed_text)
-
-        if original is None:
-            original = {}
-        if reconstructed is None:
-            reconstructed = {}
-
-        original_scenes = original.get("scenes", [])
-        new_scenes = reconstructed.get("scenes", [])
-
-        # Append reconstructed scenes
-        original["scenes"] = original_scenes + new_scenes
-
-        return yaml.dump(original, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    except Exception as e:
-        print(f"  ⚠ Could not merge YAML cleanly: {e}")
-        return analysis_text + "\n" + reconstructed_text
-
-
 def _split_script_into_segments(script_text: str, num_segments: int) -> list[str]:
-    """Split a script into N roughly equal segments by paragraph.
-    
-    Merges small paragraphs and splits large ones to create balanced segments.
-    Each segment becomes the narration for one 10-second video clip.
-    """
-    # Split into paragraphs
+    """Split a script into N roughly equal segments."""
     paragraphs = re.split(r'\n\s*\n', script_text.strip())
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
-
     if len(paragraphs) == 0:
         return [script_text] * num_segments
-
-    # If fewer paragraphs than segments, further split by sentences
     if len(paragraphs) < num_segments:
         all_sentences = []
         for para in paragraphs:
@@ -311,16 +261,6 @@ def _split_script_into_segments(script_text: str, num_segments: int) -> list[str
         units = all_sentences if len(all_sentences) >= num_segments else paragraphs
     else:
         units = paragraphs
-
-    # Distribute units evenly across segments
-    if len(units) <= num_segments:
-        # Fewer units than segments — pad by repeating last
-        segments = units[:]
-        while len(segments) < num_segments:
-            segments.append(segments[-1])
-        return segments
-
-    # More units than segments — merge groups
     segments = []
     per_segment = len(units) / num_segments
     for i in range(num_segments):
@@ -330,23 +270,66 @@ def _split_script_into_segments(script_text: str, num_segments: int) -> list[str
             end = len(units)
         chunk = " ".join(units[start:end])
         segments.append(chunk)
-
     return segments
 
 
-def _get_negative_instructions(visual_style: str) -> str:
-    """Build negative prompt instructions based on detected style."""
-    style_lower = visual_style.lower()
-    if any(kw in style_lower for kw in ["3d", "cgi", "animation", "animated", "cartoon"]):
+def _build_character_anchors(char_profile: dict) -> str:
+    """Build a character anchor string from the profile.
+
+    Each character gets one line: their name and their appearance_anchor phrase.
+    This is injected into every image and video batch prompt so the model
+    uses the exact same description every scene.
+    """
+    characters = char_profile.get("characters", [])
+    if not characters:
         return (
-            '- Include: "photorealistic, live-action, photograph, DSLR, real skin texture, '
-            'watermark, text, subtitle, blurry, low quality, text overlay, label, UI element"'
+            "Main character: a tall thin black stick figure with an oversized detached cartoon face, "
+            "flat colors, thick black outlines"
         )
-    else:
-        return (
-            '- Include: "3D render, cartoon, anime, CGI, plastic texture, '
-            'watermark, text, subtitle, blurry, low quality, text overlay, label, UI element"'
-        )
+    lines = []
+    for c in characters:
+        name = c.get("name", "Character")
+        anchor = c.get("appearance_anchor", "")
+        if not anchor:
+            # Build from visual_attributes if appearance_anchor missing
+            attrs = c.get("visual_attributes", {})
+            skin = attrs.get("skin_tone", "white")
+            hair = attrs.get("hair", "dark hair")
+            clothing = attrs.get("clothing", "simple clothing")
+            anchor = (
+                f"a tall thin black stick figure with {hair} and a detached {skin} face "
+                f"with expressive eyes, wearing {clothing}"
+            )
+        lines.append(f"{name}: {anchor}")
+    return "\n".join(lines)
+
+
+async def _get_character_profile(script_text: str) -> dict:
+    """Extract character profiles from the script."""
+    print("\n  👤 Defining characters for consistency...")
+    prompt = CHARACTER_PROFILE_PROMPT.format(script_text=script_text)
+    
+    # Try different models in order of preference
+    models_to_try = [Model.UNSPECIFIED, Model.G_3_0_FLASH, Model.G_3_0_PRO]
+    
+    for model in models_to_try:
+        try:
+            resp = await client.generate_content(prompt, model=model)
+            json_text = _parse_json_block(resp.text)
+            profile = json.loads(json_text)
+            chars = profile.get("characters", [])
+            print(f"  ✅ Defined {len(chars)} character(s): {[c.get('name') for c in chars]} (model: {model.model_name})")
+            return profile
+        except Exception as e:
+            error_msg = str(e)
+            if "405" in error_msg or "Method Not Allowed" in error_msg:
+                print(f"  ⚠ Model {model.model_name} not available, trying next...")
+                continue
+            print(f"  ⚠ Failed with model {model.model_name}: {e}")
+            continue
+    
+    print(f"  ⚠ All models failed for character profile generation")
+    return {"characters": []}
 
 
 # ---------------------------------------------------------------------------
@@ -362,305 +345,229 @@ async def run_multimodal_flow(
     preview_duration: int = 60,
     clip_count: int = 0,
     script_path: str | None = None,
+    enable_story_flow: bool = True,
 ):
-    """Run the multimodal analysis + batched prompt engineering flow.
+    """Generate natural-language image and video prompts from a script."""
+    print(f"🚀 Prompt Generation Mode — Style: Crude Cartoon / MS Paint Webcomic")
 
-    For short videos (or when no transcript is provided), runs the original 2-turn flow.
-    For long videos with a transcript, runs a 3-turn flow with scene reconstruction.
-    
-    If script_path is provided (Spanish script), prompts are generated in batches
-    of ~8 scenes at a time, ensuring ALL clips get unique scene prompts.
-    """
-    is_long_video = transcript_path is not None and video_duration > 90
-
-    if is_long_video:
-        print(f"🚀 Long Video Mode — analyzing preview, then reconstructing {video_duration:.0f}s of content")
-    else:
-        print(f"🚀 Standard Mode — full video analysis")
-
-    print(f"   Video/Preview: {video_path}")
     await client.init(timeout=600, watchdog_timeout=300)
 
-    # Use non-thinking model for more reliable multimodal (video) processing
-    MODELS_TO_TRY = [Model.G_3_0_FLASH, Model.G_3_0_PRO]
-    MAX_RETRIES = 3
-    BATCH_SIZE = 8  # Scenes per Gemini call for prompt generation
+    if not script_path or not Path(script_path).exists():
+        print("❌ Script path missing. Cannot generate prompts without script.")
+        return
 
-    # -----------------------------------------------------------------------
-    # Turn 1: Visual Analysis (preview clip or full video)
-    # -----------------------------------------------------------------------
-    analysis_text = None
-    chat = None
+    script_text = Path(script_path).read_text(encoding="utf-8").strip()
 
-    for model in MODELS_TO_TRY:
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                print(f"\n  Attempt {attempt}/{MAX_RETRIES} with {model}...")
-                chat = client.start_chat(model=model)
+    # 1. Define characters
+    char_profile = await _get_character_profile(script_text)
+    character_anchors = _build_character_anchors(char_profile)
 
-                print("\n[Turn 1] Visual Analysis (with video)...")
-                resp1 = await chat.send_message(ANALYSIS_PROMPT, files=[video_path])
-                analysis_text = resp1.text
-                break  # success
-            except Exception as e:
-                print(f"  ⚠ Attempt {attempt} failed: {e}")
-                if attempt == MAX_RETRIES:
-                    print(f"  All {MAX_RETRIES} attempts failed with {model}, trying next model...")
-                    analysis_text = None
-                else:
-                    import time
-                    wait = attempt * 10
-                    print(f"  Waiting {wait}s before retry...")
-                    await asyncio.sleep(wait)
-        if analysis_text:
-            break
+    print(f"\n  Character anchors:\n{character_anchors}\n")
 
-    if not analysis_text:
-        print("❌ All models and retries exhausted. Could not analyze the video.")
-        sys.exit(1)
+    # 2. Split script into segments
+    segments = _split_script_into_segments(script_text, clip_count)
 
-    analysis_text = _parse_yaml_block(analysis_text)
-    print("✅ Analysis captured.")
+    print(f"\n[Batched Prompts] Generating {clip_count} scene prompts in batches of 8...")
+    print(f"  Pass 1: Image prompts (natural language, style anchor + scene + characters)")
+    print(f"  Pass 2: Video prompts (same + motion beats)")
 
-    # -----------------------------------------------------------------------
-    # Turn 2 (long videos only): Reconstruct remaining scenes
-    # -----------------------------------------------------------------------
-    if is_long_video:
-        print("\n[Turn 2] Reconstructing remaining scenes from transcript + visual patterns...")
+    BATCH_SIZE = 8
+    num_batches = math.ceil(clip_count / BATCH_SIZE)
+    scene_tasks = [(i + 1, segments[i]) for i in range(clip_count)]
 
-        try:
-            analysis_data = yaml.safe_load(analysis_text)
-        except Exception:
-            analysis_data = {}
+    # --- Pass 1: Image prompts ---
+    image_scenes_flat = []
+    for batch_idx in range(num_batches):
+        start_i = batch_idx * BATCH_SIZE
+        end_i = min(start_i + BATCH_SIZE, clip_count)
+        batch = scene_tasks[start_i:end_i]
+        batch_size = len(batch)
+        start_num = batch[0][0]
+        end_num = batch[-1][0]
 
-        analyzed_scenes = analysis_data.get("scenes", [])
-        transcript_text = _load_transcript(transcript_path)
+        segments_text = ""
+        for sn, seg in batch:
+            segments_text += f"\n--- SEGMENT {sn} ---\n{seg}\n"
 
-        preview_end_mm = preview_duration // 60
-        preview_end_ss = preview_duration % 60
-        preview_end = f"{preview_end_mm:02d}:{preview_end_ss:02d}"
-
-        reconstruction_prompt = RECONSTRUCTION_PROMPT.format(
-            preview_duration=preview_duration,
-            total_duration=video_duration,
-            analyzed_scene_count=len(analyzed_scenes),
-            preview_end=preview_end,
-            visual_style=analysis_data.get("visual_style", "unknown"),
-            style_subcategory=analysis_data.get("style_subcategory", "unknown"),
-            animation_complexity=analysis_data.get("animation_complexity", "moderate"),
-            color_palette=analysis_data.get("color_palette", "unknown"),
-            rendering_style=analysis_data.get("rendering_style", "unknown"),
-            transcript=transcript_text,
-            next_scene_number=len(analyzed_scenes) + 1,
+        prompt = IMAGE_BATCH_PROMPT.format(
+            style_anchor=STYLE_ANCHOR,
+            character_anchors=character_anchors,
+            negative=IMAGE_NEGATIVE,
+            start_num=start_num,
+            end_num=end_num,
+            segments_text=segments_text,
+            batch_size=batch_size,
         )
 
-        try:
-            resp2 = await chat.send_message(reconstruction_prompt)
-            reconstructed_text = _parse_yaml_block(resp2.text)
-            analysis_text = _merge_analysis_with_reconstructed(analysis_text, reconstructed_text)
-            print(f"✅ Reconstructed scenes merged.")
-        except Exception as e:
-            print(f"  ⚠ Scene reconstruction failed: {e}")
-            print("  Continuing with partial analysis only...")
+        print(f"\n  [Image] Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num}...")
 
-    # Save analysis
+        for attempt in range(1, 4):
+            try:
+                # Try different models in order of preference
+                models_to_try = [Model.UNSPECIFIED, Model.G_3_0_FLASH, Model.G_3_0_PRO]
+                
+                for model in models_to_try:
+                    try:
+                        resp = await client.generate_content(prompt, model=model)
+                        json_text = _parse_json_block(resp.text)
+                        batch_data = json.loads(json_text)
+                        batch_scenes = batch_data.get("scenes", [])
+                        if batch_scenes:
+                            for k, scene in enumerate(batch_scenes):
+                                if k < len(batch):
+                                    scene["scene_number"] = batch[k][0]
+                            image_scenes_flat.extend(batch_scenes)
+                            print(f"    ✅ Got {len(batch_scenes)} image prompts (model: {model.model_name})")
+                            break
+                    except Exception as model_error:
+                        if "405" in str(model_error) or "Method Not Allowed" in str(model_error):
+                            print(f"    ⚠ Model {model.model_name} not available, trying next...")
+                            continue
+                        raise model_error
+                else:
+                    raise Exception("All models failed")
+                break
+            except Exception as e:
+                print(f"    ⚠ Attempt {attempt} failed: {e}")
+                if attempt < 3:
+                    wait_time = 10 * attempt
+                    print(f"    Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+
+    # --- Pass 2: Video prompts ---
+    video_scenes_flat = []
+    for batch_idx in range(num_batches):
+        start_i = batch_idx * BATCH_SIZE
+        end_i = min(start_i + BATCH_SIZE, clip_count)
+        batch = scene_tasks[start_i:end_i]
+        batch_size = len(batch)
+        start_num = batch[0][0]
+        end_num = batch[-1][0]
+
+        segments_text = ""
+        for sn, seg in batch:
+            segments_text += f"\n--- SEGMENT {sn} ---\n{seg}\n"
+
+        prompt = VIDEO_BATCH_PROMPT.format(
+            style_anchor=STYLE_ANCHOR,
+            character_anchors=character_anchors,
+            negative=VIDEO_NEGATIVE,
+            start_num=start_num,
+            end_num=end_num,
+            segments_text=segments_text,
+            batch_size=batch_size,
+        )
+
+        print(f"\n  [Video] Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num}...")
+
+        for attempt in range(1, 4):
+            try:
+                # Try different models in order of preference
+                models_to_try = [Model.UNSPECIFIED, Model.G_3_0_FLASH, Model.G_3_0_PRO]
+                
+                for model in models_to_try:
+                    try:
+                        resp = await client.generate_content(prompt, model=model)
+                        json_text = _parse_json_block(resp.text)
+                        batch_data = json.loads(json_text)
+                        batch_scenes = batch_data.get("scenes", [])
+                        if batch_scenes:
+                            for k, scene in enumerate(batch_scenes):
+                                if k < len(batch):
+                                    scene["scene_number"] = batch[k][0]
+                            video_scenes_flat.extend(batch_scenes)
+                            print(f"    ✅ Got {len(batch_scenes)} video prompts (model: {model.model_name})")
+                            break
+                    except Exception as model_error:
+                        if "405" in str(model_error) or "Method Not Allowed" in str(model_error):
+                            print(f"    ⚠ Model {model.model_name} not available, trying next...")
+                            continue
+                        raise model_error
+                else:
+                    raise Exception("All models failed")
+                break
+            except Exception as e:
+                print(f"    ⚠ Attempt {attempt} failed: {e}")
+                if attempt < 3:
+                    wait_time = 10 * attempt
+                    print(f"    Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+
+    # --- Merge image + video ---
+    video_map = {s["scene_number"]: s.get("video_prompt") for s in video_scenes_flat}
+    all_scenes = []
+    for scene in image_scenes_flat:
+        sn = scene["scene_number"]
+        scene["video_prompt"] = video_map.get(sn, (
+            f"{STYLE_ANCHOR}. Scene {sn}. Character stands in environment. "
+            "[0s-2s] Character stands still, ambient environment motion. "
+            "[2s-4s] Slow camera push-in. [4s-6s] Scene holds. Camera static. "
+            f"negative: {VIDEO_NEGATIVE}"
+        ))
+        all_scenes.append(scene)
+
+    # Save prompts
+    final_data = {
+        "visual_style": STYLE_CONTEXT["visual_style"],
+        "style_subcategory": STYLE_CONTEXT["style_subcategory"],
+        "style_anchor": STYLE_ANCHOR,
+        "character_profile": char_profile,
+        "character_anchors": character_anchors,
+        "scenes": all_scenes,
+    }
+
+    with open(prompts_out, "w", encoding="utf-8") as f:
+        yaml.dump(final_data, f, sort_keys=False, allow_unicode=True)
+
     with open(analysis_out, "w", encoding="utf-8") as f:
-        f.write(analysis_text)
+        yaml.dump(STYLE_CONTEXT, f)
 
-    # -----------------------------------------------------------------------
-    # Parse analysis for style context
-    # -----------------------------------------------------------------------
-    try:
-        analysis_data = yaml.safe_load(analysis_text)
-    except Exception:
-        analysis_data = {}
-
-    visual_style = analysis_data.get("visual_style", "3D animation")
-    style_subcategory = analysis_data.get("style_subcategory", "stylized CGI")
-    animation_complexity = analysis_data.get("animation_complexity", "moderate")
-    color_palette = analysis_data.get("color_palette", "vibrant colors")
-    rendering_style = analysis_data.get("rendering_style", "smooth surfaces, soft shadows")
-    negative_instructions = _get_negative_instructions(visual_style)
-
-    # -----------------------------------------------------------------------
-    # Batched Prompt Generation
-    # -----------------------------------------------------------------------
-    if script_path and clip_count > 0 and Path(script_path).exists():
-        # BATCHED MODE: Split script into segments, generate prompts in batches
-        script_text = Path(script_path).read_text(encoding="utf-8").strip()
-        segments = _split_script_into_segments(script_text, clip_count)
-
-        print(f"\n[Batched Prompts] Generating {clip_count} scene prompts in batches of {BATCH_SIZE}...")
-        print(f"  Style: {visual_style} / {style_subcategory}")
-
-        all_scenes = []
-        num_batches = math.ceil(clip_count / BATCH_SIZE)
-
-        for batch_idx in range(num_batches):
-            start_i = batch_idx * BATCH_SIZE
-            end_i = min(start_i + BATCH_SIZE, clip_count)
-            batch_segments = segments[start_i:end_i]
-            batch_size = len(batch_segments)
-            start_num = start_i + 1
-            end_num = end_i
-
-            # Format segments for the prompt
-            segments_text = ""
-            for j, seg in enumerate(batch_segments):
-                scene_num = start_i + j + 1
-                segments_text += f"\n--- SEGMENT {scene_num} ---\n{seg}\n"
-
-            # Build character context from analysis if available
-            character_context = ""
-            recurring_chars = analysis_data.get("recurring_characters", [])
-            if recurring_chars:
-                char_lines = ["\nRECURRING CHARACTERS (LOCK — maintain EXACT same appearance in every scene):"]
-                for ch in recurring_chars[:5]:
-                    name = ch.get("name", "unknown")
-                    desc = ch.get("visual_description", "") or ch.get("canonical_description", "")
-                    if desc:
-                        char_lines.append(f"  - {name}: {desc}")
-                char_lines.append(
-                    "  ⚠ NEVER change gender, body type, skin tone, hair, or clothing between scenes."
-                )
-                character_context = "\n".join(char_lines)
-
-            prompt = BATCH_PROMPT.format(
-                visual_style=visual_style,
-                style_subcategory=style_subcategory,
-                animation_complexity=animation_complexity,
-                color_palette=color_palette,
-                rendering_style=rendering_style,
-                character_context=character_context,
-                start_num=start_num,
-                end_num=end_num,
-                segments_text=segments_text,
-                negative_instructions=negative_instructions,
-                batch_size=batch_size,
-            )
-
-            print(f"\n  Batch {batch_idx + 1}/{num_batches}: scenes {start_num}-{end_num} ({batch_size} scenes)...")
-
-            # Each batch gets a fresh chat for reliability
-            batch_done = False
-            for attempt in range(1, MAX_RETRIES + 1):
-                try:
-                    batch_chat = client.start_chat(model=MODELS_TO_TRY[0])
-                    resp = await batch_chat.send_message(prompt)
-                    json_text = _parse_json_block(resp.text)
-                    batch_data = json.loads(json_text)
-                    batch_scenes = batch_data.get("scenes", [])
-
-                    if len(batch_scenes) > 0:
-                        all_scenes.extend(batch_scenes)
-                        print(f"    ✅ Got {len(batch_scenes)} scenes")
-                        batch_done = True
-                        break
-                    else:
-                        print(f"    ⚠ No scenes in response, retrying...")
-                except Exception as e:
-                    print(f"    ⚠ Attempt {attempt} failed: {e}")
-                    if attempt < MAX_RETRIES:
-                        await asyncio.sleep(5 * attempt)
-
-            if not batch_done:
-                print(f"    ❌ Batch {batch_idx + 1} failed after {MAX_RETRIES} attempts — skipping")
-
-        # Combine all batches into final output
-        final_data = {
-            "visual_style": visual_style,
-            "style_subcategory": style_subcategory,
-            "animation_complexity": animation_complexity,
-            "recurring_characters": analysis_data.get("recurring_characters", []),
-            "scenes": all_scenes,
-        }
-
-        with open(prompts_out, "w", encoding="utf-8") as f:
-            yaml.dump(final_data, f, sort_keys=False, allow_unicode=True)
-
-        print(f"\n✅ Batched prompt generation complete: {len(all_scenes)} scenes total.")
-
-    else:
-        # SINGLE-SHOT MODE (fallback when no script is provided)
-        turn_label = "Turn 3" if is_long_video else "Turn 2"
-        print(f"\n[{turn_label}] Single-shot prompts (no script provided)...")
-
-        if clip_count > 0:
-            clip_count_instruction = (
-                f"Generate EXACTLY {clip_count} scenes. Each scene = 10-second video clip.\n"
-                f"Distribute visual concepts evenly across all {clip_count} scenes."
-            )
-        else:
-            clip_count_instruction = (
-                "Generate one scene per visual concept from the analysis.\n"
-                "Each scene will become a 10-second video clip."
-            )
-
-        # Build a simpler unified prompt for single-shot mode
-        single_shot_prompt = f"""\
-Now generate clone-quality image and video prompts for the scenes you analyzed.
-
-{clip_count_instruction}
-
-For each scene, generate:
-1. Image Prompt — reproduce the exact frame from analysis, starting with the style prefix "{visual_style}, {style_subcategory}"
-2. Video Prompt — simple animation starting with "Animate this exact image:"
-3. Spanish script — viral Spanish narration for the scene
-
-OUTPUT as valid JSON:
-{{{{
-  "visual_style": "{visual_style}",
-  "style_subcategory": "{style_subcategory}",
-  "animation_complexity": "{animation_complexity}",
-  "scenes": [
-    {{{{
-      "scene_number": 1,
-      "spanish_script": "...",
-      "image_prompt": {{{{ "prompt": "...", "negative_prompt": "...", "aspect_ratio": "16:9" }}}},
-      "video_prompt": {{{{ "prompt": "Animate this exact image: ...", "duration": "10s", "camera_motion": "..." }}}}
-    }}}}
-  ]
-}}}}
-"""
-
+    print(f"\n✅ Prompt generation complete: {len(all_scenes)} scenes total.")
+    if all_scenes:
+        sample = all_scenes[0]
+        print(f"\n  Sample image prompt (scene 1):\n  {str(sample.get('image_prompt',''))[:300]}...")
+        print(f"\n  Sample video prompt (scene 1):\n  {str(sample.get('video_prompt',''))[:300]}...")
+    
+    # --- Story Context Enhancement ---
+    if enable_story_flow and script_path and Path(script_path).exists():
+        print(f"\n🎬 Enhancing prompts with story context...")
         try:
-            resp_final = await chat.send_message(single_shot_prompt)
-            prompts_text = _parse_json_block(resp_final.text)
-            data = json.loads(prompts_text)
-            with open(prompts_out, "w", encoding="utf-8") as f:
-                yaml.dump(data, f, sort_keys=False, allow_unicode=True)
-            scene_count = len(data.get("scenes", []))
-            print(f"✅ Clone-quality prompts generated: {scene_count} scenes.")
-        except json.JSONDecodeError as e:
-            print(f"❌ Failed to parse Gemini's JSON response: {e}")
-            print("Raw response:", resp_final.text[:2000])
-            sys.exit(1)
+            success = enhance_prompts(
+                prompts_path=prompts_out,
+                script_path=script_path,
+                output_path=prompts_out
+            )
+            if success:
+                print(f"  ✅ Story context enhancement complete!")
+            else:
+                print(f"  ⚠ Story context enhancement failed, using base prompts")
         except Exception as e:
-            print(f"❌ Prompt generation failed: {e}")
-            sys.exit(1)
+            print(f"  ⚠ Story context enhancement error: {e}")
+            print(f"  Continuing with base prompts...")
+    elif enable_story_flow:
+        print(f"\n  ℹ Story flow enhancement skipped (no script file available)")
+    else:
+        print(f"\n  ℹ Story flow enhancement disabled")
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Gemini Multimodal Orchestrator — Adaptive Analysis + Batched Prompts."
+        description="Gemini Multimodal Orchestrator — Natural Language Prompt Generation."
     )
     parser.add_argument("video_path", help="Path to the video (or preview clip)")
-    parser.add_argument("analysis_out", nargs="?", default="outputs/analysis.yaml",
-                        help="Path for analysis YAML output")
-    parser.add_argument("prompts_out", nargs="?", default="outputs/prompts.yaml",
-                        help="Path for prompts YAML output")
-    parser.add_argument("--transcript", default=None,
-                        help="Path to English transcript (enables long-video reconstruction)")
-    parser.add_argument("--duration", type=float, default=0.0,
-                        help="Total video duration in seconds (for long-video mode)")
-    parser.add_argument("--preview-duration", type=int, default=60,
-                        help="How many seconds the preview clip covers (default: 60)")
-    parser.add_argument("--clip-count", type=int, default=0,
-                        help="Exact number of scene prompts to generate (0 = auto from analysis)")
-    parser.add_argument("--script", default=None,
-                        help="Path to Spanish script (enables batched prompt generation)")
+    parser.add_argument("analysis_out", nargs="?", default="outputs/analysis.yaml")
+    parser.add_argument("prompts_out", nargs="?", default="outputs/prompts.yaml")
+    parser.add_argument("--transcript", default=None)
+    parser.add_argument("--duration", type=float, default=0.0)
+    parser.add_argument("--preview-duration", type=int, default=60)
+    parser.add_argument("--clip-count", type=int, default=0)
+    parser.add_argument("--script", default=None)
+    parser.add_argument("--enable-story-flow", action="store_true", default=True,
+                        help="Enable story context enhancement (default: enabled)")
+    parser.add_argument("--disable-story-flow", action="store_false", dest="enable_story_flow",
+                        help="Disable story context enhancement")
 
     args = parser.parse_args()
 
@@ -673,4 +580,5 @@ if __name__ == "__main__":
         preview_duration=args.preview_duration,
         clip_count=args.clip_count,
         script_path=args.script,
+        enable_story_flow=args.enable_story_flow,
     ))

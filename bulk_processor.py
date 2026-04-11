@@ -141,8 +141,8 @@ def process_video(video_path):
     # --- Step 2: Rewrite Script (DeepSeek-R1) ---
     spa_script = output_dir / "spanish_script.txt"
     if not run_step(video_name, "rewrite", [
-        PYTHON, str(UTILS_DIR / "rewrite_script.py"),
-        str(eng_script), "-o", str(spa_script), "--model", "deepseek-ai/deepseek-v3.1"
+        PYTHON, str(UTILS_DIR / "rewrite_script_gemini.py"),
+        str(eng_script), "-o", str(spa_script)
     ], assets={"spanish_script": str(spa_script)}):
         return False
 
@@ -212,10 +212,7 @@ def process_video(video_path):
         "--grok-api-base", os.environ.get("GROK_API_BASE", "http://localhost:8000"),
         "--api-key", os.environ.get("GROK_API_KEY", "grok2api"),
         "--aspect-ratio", "16:9", "--retries", "5",
-        "--video-minutes", "3",
     ]
-    if analysis_file.exists():
-        gen_videos_cmd.extend(["--analysis-file", str(analysis_file)])
 
     print(f"\n  [RUNNING] videos...")
     print(f"  Command: {' '.join(gen_videos_cmd)}")

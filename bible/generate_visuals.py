@@ -13,7 +13,7 @@ VIDEO PROMPTS: Motion-only. No character description. Pure camera movement
 and environmental action beats. Character appearance is locked by the image,
 not re-described in the video prompt.
 
-Uses Gemini WebUI (G_3_0_PRO) in batches of 8.
+Uses Gemini WebUI (ADVANCED_PRO) in batches of 8.
 """
 
 import asyncio
@@ -26,6 +26,9 @@ import time
 import yaml
 from pathlib import Path
 
+# Add Gemini-API-New to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "Gemini-API-New" / "src"))
+
 from gemini_webapi import GeminiClient
 from gemini_webapi.constants import Model
 
@@ -37,26 +40,18 @@ BATCH_SIZE = 8
 MAX_RETRIES = 3
 
 # ---------------------------------------------------------------------------
-# Art style — applied to both image and video prompts
+# Art style — applied to image prompts only
 # ---------------------------------------------------------------------------
 
-# Character design rules injected into every prompt
-CHARACTER_RULES = """\
-CHARACTER DESIGN (mandatory for every scene):
-- Every character has an OVERSIZED cartoon head (~40% of total figure height) with a
-  highly-detailed realistic face: expressive eyes, prominent nose, heavy eyelids,
-  visible teeth when mouth is open, wrinkles/skin texture — drawn with thick black outlines.
+# Base style rules to be adapted by the character profile
+CHARACTER_BASE_STYLE = """\
+BASE ART STYLE (mandatory):
+- Characters have an OVERSIZED cartoon head (~40% of total figure height).
+- Face is HIGHLY DETAILED and expressive: wrinkles, prominent nose, heavy eyelids, 
+  realistic skin texture — drawn with thick black outlines.
 - Body is a STICK FIGURE: thin black lines for arms, legs, and torso. No muscle, no bulk.
 - Flat digital coloring. Hard black outlines on everything.
-- Characters ADAPT appearance to the story's cultural context:
-    Biblical/Middle Eastern → robes, head coverings, sandals, olive/brown skin
-    Chinese → hanfu robes, black hair, East Asian features
-    Viking → furs, horned helmet, blonde/red hair, pale skin
-    African → colorful kente/dashiki, dark skin, natural hair
-    Modern → contemporary clothing
-- Match the character's facial expression to the EMOTION in the script moment.
-  Do NOT default to angry/intense — use calm, curious, sad, joyful, fearful as appropriate.
-- Maximum 2 characters per scene. Position them clearly: left foreground, right background, etc.\
+- Characters ADAPT appearance to the story's cultural context (clothing, skin tone, hair).
 """
 
 IMAGE_NEGATIVE_PROMPT = (
@@ -66,185 +61,274 @@ IMAGE_NEGATIVE_PROMPT = (
     "tiled images, split screen, photo montage"
 )
 
+VIDEO_NEGATIVE_PROMPT = (
+    "photorealistic, 3D render, CGI, watermark, text, subtitle, blurry, "
+    "low quality, multiple panels, split screen, collage, static image"
+)
+
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
-IMAGE_BATCH_PROMPT = """\
-You are an expert Prompt Engineer for AI IMAGE generation (still frames).
-I'll give you SCRIPT SEGMENTS. For each, produce a structured JSON image prompt
-describing the scene as a 2D digital illustration still frame.
+CHARACTER_PROFILE_PROMPT = """\
+You are a Character Designer. Based on the SCRIPT, define the visual profiles for the main characters.
 
-{character_rules}
+{base_style}
 
-OUTPUT FORMAT — for each scene produce a JSON object matching this exact structure:
+IMPORTANT: Characters must be culturally authentic to the story's setting.
+- A Viking character should have Norse features, fur clothing, braided hair.
+- A Chinese character should have East Asian features, period-appropriate clothing.
+- An Egyptian character should have Egyptian features, linen garments, kohl eyeliner.
+- Adapt EVERYTHING (skin tone, hair, clothing, accessories) to the story's culture and era.
+- Do NOT use generic Western defaults.
+
+For each recurring character, define their specific features based on the script's culture/era.
+Return ONLY a JSON object.
+
+SCRIPT:
+{script_text}
+
+OUTPUT FORMAT:
 {{
-  "meta": {{
-    "image_quality": "High",
-    "image_type": "Illustration/Animation Frame",
-    "resolution_estimation": "1280x720"
-  }},
-  "global_context": {{
-    "scene_description": "(one sentence: who is doing what, where, in the art style)",
-    "time_of_day": "(Daytime / Night / Dusk / Dawn)",
-    "weather_atmosphere": "(Clear / Stormy / Snowy / Dusty / etc.)",
-    "lighting": {{
-      "source": "(Natural sunlight / Torchlight / Moonlight / etc.)",
-      "direction": "(Top-down / Side / Front / etc.)",
-      "quality": "(Soft / Hard / Dramatic)",
-      "color_temp": "(Warm / Cool / Neutral)"
-    }}
-  }},
-  "color_palette": {{
-    "dominant_hex_estimates": ["#XXXXXX", "#XXXXXX", "#XXXXXX"],
-    "accent_colors": ["color1", "color2"],
-    "contrast_level": "(High / Medium / Low)"
-  }},
-  "composition": {{
-    "camera_angle": "(Eye-level / Low angle / High angle / Over-shoulder)",
-    "framing": "(Wide shot / Medium shot / Close-up / Medium-close)",
-    "depth_of_field": "(Deep — everything in focus / Shallow — background blurred)",
-    "focal_point": "(what the eye is drawn to)"
-  }},
-  "objects": [
+  "characters": [
     {{
-      "id": "obj_001",
-      "label": "(descriptive label)",
-      "category": "(Person/Character | Animal | Object/Prop | Environment/Flora | Environment/Terrain | Environment/Sky)",
-      "location": "(Top-Left | Top-Center | Top-Right | Center-Left | Center | Center-Right | Bottom-Left | Bottom-Center | Bottom-Right | Background | Foreground | Midground)",
-      "prominence": "(Foreground | Midground | Background)",
+      "name": "...",
+      "role": "...",
+      "cultural_context": "(e.g. Ancient Egyptian, Viking Age Norse, Han Dynasty Chinese)",
       "visual_attributes": {{
-        "color": "(description)",
-        "texture": "(Smooth/Digital | Wood | Fabric | Stone | etc.)",
-        "material": "(Digital ink | Wood | Cloth | etc.)",
-        "state": "(Undamaged | Damaged | In motion | etc.)",
-        "dimensions_relative": "(Very Small | Small | Medium | Large | Very Large)"
+        "skin_tone": "...",
+        "hair": "...",
+        "eyes": "...",
+        "clothing": "...",
+        "accessories": "..."
       }},
-      "micro_details": ["detail 1", "detail 2"],
-      "pose_or_orientation": "(description of pose, direction facing, or spatial orientation)",
-      "text_content": null
+      "micro_details": [
+        "Stick-figure limbs drawn with thick black lines",
+        "Oversized cartoon head (~40% of total figure height)",
+        "Highly detailed face: [specific features for this character]",
+        "Wearing: [specific culturally-accurate clothing]",
+        "..."
+      ]
     }}
-  ],
-  "text_ocr": {{
-    "present": false,
-    "content": null
-  }},
-  "semantic_relationships": [
-    "(subject) is (doing/holding/near) (object)",
-    "(character) is positioned (relative to) (other character/object)"
   ]
 }}
+"""
 
-RULES:
-- The first object in the array MUST be the main character (if present).
-- Characters must always be described with: oversized cartoon head, stick-figure body,
-  thick black outlines, flat digital coloring.
-- Include at least one environment object (background, ground, sky).
-- semantic_relationships must list every meaningful spatial or action connection.
-- Do NOT produce a collage or multi-panel layout — one unified scene only.
+IMAGE_BATCH_PROMPT = """\
+You are an expert Prompt Engineer for AI IMAGE generation.
+Generate a high-detail structured JSON image prompt for each script segment.
+These prompts will be fed directly to an image generation model (like Imagen or DALL-E).
+
+{base_style}
+
+CHARACTER PROFILE (LOCK — use these exact visual details in every scene, adapt ONLY the emotion/pose):
+{character_profiles}
+
+NEGATIVE PROMPT (apply to every scene):
+{negative_prompt}
+
+CRITICAL RULES:
+1. NEVER describe a character as "angry" or with a negative emotion unless the script explicitly calls for it.
+2. Emotions MUST match the script moment — vary them naturally (curious, surprised, determined, sad, amused, etc.).
+3. NEVER produce a collage, grid, split-screen, or multi-panel layout. ONE single illustration per scene.
+4. Every character object MUST include all micro_details from the CHARACTER PROFILE.
+5. Environment objects MUST use "Digital ink" / "Flat/Digital" textures — never photorealistic.
+6. Include at least 3 environment/background objects with detailed micro_details.
+7. The image_prompt MUST be a self-contained JSON — no references to "previous scenes".
+
+OUTPUT FORMAT — produce a JSON object with a "scenes" array. Each scene:
+{{
+  "scene_number": N,
+  "image_prompt": {{
+    "meta": {{
+      "image_quality": "High",
+      "image_type": "Illustration/Animation Frame",
+      "resolution_estimation": "1280x720"
+    }},
+    "global_context": {{
+      "scene_description": "A high-detail 2D digital illustration depicting [specific action] in [specific environment], featuring [character name(s)] with oversized cartoon heads and stick-figure bodies, flat digital coloring, thick black outlines.",
+      "time_of_day": "...",
+      "weather_atmosphere": "...",
+      "lighting": {{
+        "source": "Artificial/Digital Flat Lighting",
+        "direction": "...",
+        "quality": "Hard",
+        "color_temp": "..."
+      }}
+    }},
+    "color_palette": {{
+      "dominant_hex_estimates": ["#XXXXXX", "#XXXXXX", "#XXXXXX"],
+      "accent_colors": ["...", "..."],
+      "contrast_level": "High"
+    }},
+    "composition": {{
+      "camera_angle": "...",
+      "framing": "...",
+      "depth_of_field": "Deep (everything in focus)",
+      "focal_point": "..."
+    }},
+    "objects": [
+      {{
+        "id": "obj_001",
+        "label": "[Character Name]",
+        "category": "Person/Character",
+        "location": "...",
+        "prominence": "Foreground",
+        "visual_attributes": {{
+          "color": "[skin tone, hair color, clothing color from profile]",
+          "texture": "Smooth/Digital",
+          "material": "Digital ink/color",
+          "state": "[emotion matching the script moment]",
+          "dimensions_relative": "Large"
+        }},
+        "micro_details": [
+          "Stick-figure limbs drawn with thick black lines, no muscle",
+          "Oversized cartoon head (~40% of total figure height)",
+          "Highly detailed face: [copy exact face details from character profile]",
+          "Wearing: [copy exact clothing from character profile]",
+          "[Emotion matching this specific script moment — e.g. 'wide curious eyes', 'slight smirk']",
+          "[Pose detail — e.g. 'right stick-arm raised, pointing forward']"
+        ],
+        "pose_or_orientation": "...",
+        "text_content": null
+      }},
+      {{
+        "id": "obj_002",
+        "label": "[Second character or major prop]",
+        "category": "...",
+        "location": "...",
+        "prominence": "Midground",
+        "visual_attributes": {{
+          "color": "...",
+          "texture": "Smooth/Digital",
+          "material": "Digital ink/color",
+          "state": "...",
+          "dimensions_relative": "..."
+        }},
+        "micro_details": ["...", "..."],
+        "pose_or_orientation": "...",
+        "text_content": null
+      }},
+      {{
+        "id": "obj_003",
+        "label": "[Background environment element 1]",
+        "category": "Environment/...",
+        "location": "Background",
+        "prominence": "Background",
+        "visual_attributes": {{
+          "color": "...",
+          "texture": "Flat/Digital",
+          "material": "Digital ink",
+          "state": "Undamaged",
+          "dimensions_relative": "Large"
+        }},
+        "micro_details": [
+          "Thick black outlines defining the structure",
+          "Flat digital coloring",
+          "..."
+        ],
+        "pose_or_orientation": "Static",
+        "text_content": null
+      }},
+      {{
+        "id": "obj_004",
+        "label": "[Background environment element 2 — ground/floor/terrain]",
+        "category": "Environment/Terrain",
+        "location": "Bottom",
+        "prominence": "Background",
+        "visual_attributes": {{
+          "color": "...",
+          "texture": "Flat/Digital",
+          "material": "Digital ink",
+          "state": "Undamaged",
+          "dimensions_relative": "Large"
+        }},
+        "micro_details": ["...", "..."],
+        "pose_or_orientation": "Horizontal",
+        "text_content": null
+      }}
+    ],
+    "text_ocr": {{ "present": false, "content": null }},
+    "semantic_relationships": [
+      "[Character] is [doing action] with/near [object/environment]",
+      "..."
+    ],
+    "negative_prompt": "{negative_prompt}"
+  }}
+}}
 
 SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
 {segments_text}
 
-OUTPUT: A single valid JSON object:
-{{
-  "scenes": [
-    {{
-      "scene_number": {start_num},
-      "swahili_script": "(the script segment text)",
-      "image_prompt": {{ ...the structured prompt object above... }},
-      "negative_prompt": "{negative_prompt}"
-    }}
-  ]
-}}
-
-Generate EXACTLY {batch_size} scenes. Return ONLY the JSON, no other text.
+OUTPUT: A single JSON object with a "scenes" array containing exactly {batch_size} scenes.
+Return ONLY the JSON. No markdown, no explanation.
 """
 
 VIDEO_BATCH_PROMPT = """\
-You are an expert Prompt Engineer for AI VIDEO generation (6-second animated clips).
-I'll give you SCRIPT SEGMENTS. For each, produce a structured JSON video prompt
-describing the scene as a 2D animated clip — including what the characters are DOING
-and how the camera moves.
+You are an expert Prompt Engineer for AI VIDEO generation (image-to-video).
+The video model receives a REFERENCE IMAGE that already shows the characters.
+Your job is to describe MOTION ONLY — camera moves, environmental animation, and character actions.
 
-{character_rules}
+CRITICAL RULES — READ CAREFULLY:
+1. DO NOT describe character appearance, clothing, hair, or facial features. The reference image handles that.
+2. DO NOT include a character_description field with physical details. It will override the reference image and cause distortion.
+3. DO NOT repeat the character profile. The video model uses the image as the visual anchor.
+4. ONLY describe: what moves, how it moves, camera motion, and environment animation.
+5. Action beats MUST cover the full 6 seconds with 2-3 specific timed beats.
+6. Keep character actions simple and physical: "raises arm", "turns head left", "walks forward", "sits down".
+7. DO NOT describe emotions in the video prompt — emotions are locked in the reference image.
+8. Environment motion is encouraged: wind, dust, fire flicker, water ripple, leaves falling, etc.
 
-VIDEO PROMPT RULES:
-- Describe BOTH the scene action (what characters are doing) AND camera movement.
-- Use video-generation language: "the figure slowly raises its arm", "camera pans left",
-  "wind ripples through the trees", "character kneels down", "slow zoom toward face".
-- Refer to characters by role/position only: "the figure on the left", "the seated character",
-  "the standing figure" — do NOT re-describe hair color, clothing details, or face features
-  (those are locked by the image prompt).
-- Break 6 seconds into timed action beats covering the FULL duration.
-- Keep all movements SLOW and DELIBERATE. Avoid fast cuts, running, fighting close-ups.
-
-OUTPUT FORMAT — for each scene produce a JSON object matching this exact structure:
+OUTPUT FORMAT — produce a JSON object with a "scenes" array. Each scene:
 {{
-  "meta": {{
-    "clip_duration": "6s",
-    "style": "2D animation, flat illustration, stick-figure characters with oversized cartoon heads"
-  }},
-  "global_context": {{
-    "scene_description": "(one sentence: what is happening in this clip)",
-    "time_of_day": "(Daytime / Night / Dusk / Dawn)",
-    "weather_atmosphere": "(Clear / Stormy / Snowy / etc.)",
-    "lighting": {{
-      "source": "(Natural sunlight / Torchlight / Moonlight / etc.)",
-      "direction": "(Top-down / Side / Front)",
-      "quality": "(Soft / Hard / Dramatic)",
-      "color_temp": "(Warm / Cool / Neutral)"
-    }}
-  }},
-  "camera_motion": {{
-    "primary_move": "(slow pan left | slow pan right | gentle zoom in | gentle zoom out | static | slow tilt up | slow tilt down)",
-    "secondary_move": "(optional secondary move or null)",
-    "start_frame": "(describe what the camera sees at 0.0s)",
-    "end_frame": "(describe what the camera sees at 6.0s)"
-  }},
-  "action_beats": [
-    {{
-      "time_range": "0.0s-2.0s",
-      "action": "(what is happening — character action + any environmental motion)",
-      "camera": "(camera state during this beat)"
+  "scene_number": N,
+  "video_prompt": {{
+    "meta": {{
+      "clip_duration": "6s",
+      "style": "2D animation, flat illustration, stick-figure characters with oversized cartoon heads, digital ink"
     }},
-    {{
-      "time_range": "2.0s-4.5s",
-      "action": "(next action beat)",
-      "camera": "(camera state)"
+    "global_context": {{
+      "scene_description": "A 2D animation clip of [specific action] in [specific environment]. [Brief motion summary].",
+      "environment_description": "[Describe the setting background: walls, ground, sky, props — all in flat digital ink style. No character appearance here.]"
     }},
-    {{
-      "time_range": "4.5s-6.0s",
-      "action": "(final beat — can be a hold, a reaction, or a transition gesture)",
-      "camera": "(camera state)"
-    }}
-  ],
-  "objects_in_motion": [
-    {{
-      "label": "(what is moving)",
-      "motion_description": "(how it moves)"
-    }}
-  ],
-  "semantic_relationships": [
-    "(subject) is (doing/moving toward/reacting to) (object/other character)"
-  ]
+    "camera_motion": {{
+      "primary_move": "...",
+      "secondary_move": null,
+      "start_frame": "...",
+      "end_frame": "..."
+    }},
+    "action_beats": [
+      {{
+        "time_range": "0.0s-2.0s",
+        "action": "[Specific physical action — e.g. 'Character slowly raises right stick-arm upward']",
+        "camera": "[Camera state — e.g. 'Static medium shot']"
+      }},
+      {{
+        "time_range": "2.0s-4.0s",
+        "action": "[Next beat — e.g. 'Character turns head to the left, dust particles drift across foreground']",
+        "camera": "[Camera state]"
+      }},
+      {{
+        "time_range": "4.0s-6.0s",
+        "action": "[Final beat — e.g. 'Character lowers arm, background torch flickers']",
+        "camera": "[Camera state]"
+      }}
+    ],
+    "objects_in_motion": [
+      {{
+        "label": "[What is moving — character limb, prop, environment element]",
+        "motion_description": "[How it moves — direction, speed, style]"
+      }}
+    ],
+    "negative_prompt": "photorealistic, 3D render, CGI, watermark, text, subtitle, blurry, low quality, multiple panels, split screen, collage, static image"
+  }}
 }}
 
 SCRIPT SEGMENTS (scenes {start_num} through {end_num}):
 {segments_text}
 
-OUTPUT: A single valid JSON object:
-{{
-  "scenes": [
-    {{
-      "scene_number": {start_num},
-      "swahili_script": "(the script segment text)",
-      "video_prompt": {{ ...the structured prompt object above... }}
-    }}
-  ]
-}}
-
-Generate EXACTLY {batch_size} scenes. Return ONLY the JSON, no other text.
+OUTPUT: A single JSON object with a "scenes" array containing exactly {batch_size} scenes.
+Return ONLY the JSON. No markdown, no explanation.
 """
 
 REVIEW_PROMPT = """\
@@ -364,7 +448,29 @@ def _make_placeholder_video_prompt(scene_num: int) -> dict:
     }
 
 
-async def _run_image_batch(scene_tasks: list, batch_idx: int, num_batches: int) -> list:
+async def _generate_character_profile(script_text: str) -> dict:
+    """Define recurring characters based on the full script."""
+    print(f"\n  👤 Generating character profile for consistency...")
+    prompt = CHARACTER_PROFILE_PROMPT.format(
+        base_style=CHARACTER_BASE_STYLE,
+        script_text=script_text
+    )
+    
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            chat = client.start_chat(model=Model.G_3_0_FLASH)
+            resp = await chat.send_message(prompt)
+            json_text = _parse_json_block(resp.text)
+            return json.loads(json_text)
+        except Exception as e:
+            print(f"    ⚠ Character profile attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(5 * attempt)
+    
+    return {"characters": []}
+
+
+async def _run_image_batch(scene_tasks: list, char_profile: dict, batch_idx: int, num_batches: int) -> list:
     """Generate structured JSON image prompts for a batch of scenes."""
     batch_size = len(scene_tasks)
     start_num = scene_tasks[0][0]
@@ -375,7 +481,8 @@ async def _run_image_batch(scene_tasks: list, batch_idx: int, num_batches: int) 
         segments_text += f"\n--- SEGMENT {sn} ---\n{seg_text}\n"
 
     prompt = IMAGE_BATCH_PROMPT.format(
-        character_rules=CHARACTER_RULES,
+        base_style=CHARACTER_BASE_STYLE,
+        character_profiles=json.dumps(char_profile, indent=2),
         negative_prompt=IMAGE_NEGATIVE_PROMPT,
         start_num=start_num,
         end_num=end_num,
@@ -387,7 +494,7 @@ async def _run_image_batch(scene_tasks: list, batch_idx: int, num_batches: int) 
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            chat = client.start_chat(model=Model.G_3_0_PRO)
+            chat = client.start_chat(model=Model.G_3_0_FLASH)
             resp = await chat.send_message(prompt)
             json_text = _parse_json_block(resp.text)
             batch_data = json.loads(json_text)
@@ -408,7 +515,7 @@ async def _run_image_batch(scene_tasks: list, batch_idx: int, num_batches: int) 
     return [
         {
             "scene_number": sn,
-            "swahili_script": seg_text,
+            "segment_text": seg_text,
             "image_prompt": _make_placeholder_image_prompt(seg_text),
             "negative_prompt": IMAGE_NEGATIVE_PROMPT,
         }
@@ -416,25 +523,21 @@ async def _run_image_batch(scene_tasks: list, batch_idx: int, num_batches: int) 
     ]
 
 
-async def _run_video_batch(scene_tasks: list, image_scenes: dict,
-                           batch_idx: int, num_batches: int) -> list:
-    """Generate structured JSON video prompts for a batch of scenes."""
+async def _run_video_batch(scene_tasks: list, char_profile: dict, batch_idx: int, num_batches: int) -> list:
+    """Generate structured JSON video prompts for a batch of scenes.
+    
+    NOTE: Video prompts are motion-only. Character appearance is NOT included
+    here — it is locked by the reference image passed to the video model.
+    """
     batch_size = len(scene_tasks)
     start_num = scene_tasks[0][0]
     end_num = scene_tasks[-1][0]
 
-    # Include the scene_description from the image prompt as context
     segments_text = ""
     for sn, seg_text in scene_tasks:
-        img_scene = image_scenes.get(sn, {})
-        img_prompt = img_scene.get("image_prompt", {})
-        scene_desc = ""
-        if isinstance(img_prompt, dict):
-            scene_desc = img_prompt.get("global_context", {}).get("scene_description", "")
-        segments_text += f"\n--- SEGMENT {sn} ---\nScript: {seg_text}\nScene context: {scene_desc}\n"
+        segments_text += f"\n--- SEGMENT {sn} ---\n{seg_text}\n"
 
     prompt = VIDEO_BATCH_PROMPT.format(
-        character_rules=CHARACTER_RULES,
         start_num=start_num,
         end_num=end_num,
         segments_text=segments_text,
@@ -445,7 +548,7 @@ async def _run_video_batch(scene_tasks: list, image_scenes: dict,
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            chat = client.start_chat(model=Model.G_3_0_PRO)
+            chat = client.start_chat(model=Model.G_3_0_FLASH)
             resp = await chat.send_message(prompt)
             json_text = _parse_json_block(resp.text)
             batch_data = json.loads(json_text)
@@ -493,7 +596,7 @@ async def _run_consistency_review(all_scenes: list) -> list:
         scenes_yaml = yaml.dump(review_input, default_flow_style=False, allow_unicode=True)
         review_prompt = REVIEW_PROMPT.format(scenes_yaml=scenes_yaml)
 
-        chat = client.start_chat(model=Model.G_3_0_PRO)
+        chat = client.start_chat(model=Model.G_3_0_FLASH)
         resp = await chat.send_message(review_prompt)
         review_json = _parse_json_block(resp.text)
         review_data = json.loads(review_json)
@@ -506,10 +609,10 @@ async def _run_consistency_review(all_scenes: list) -> list:
                 sn = fix.get("scene_number")
                 fixed_prompt = fix.get("fixed_prompt", "")
                 if sn and fixed_prompt and sn in scene_map:
-                    ip = scene_map[sn].get("image_prompt", {})
-                    if isinstance(ip, dict):
-                        ip["prompt"] = fixed_prompt
-                        print(f"    ✓ Fixed scene {sn} image_prompt")
+                    # In the new structure, we update the whole image_prompt if needed
+                    # but usually fixes are minor strings. This part might need adaptation
+                    # depending on how detailed the 'fix' is.
+                    print(f"    ⚠ Manual fix required for scene {sn} (structure change)")
         else:
             print(f"    ✅ All image prompts are consistent!")
     except Exception as e:
@@ -522,11 +625,11 @@ async def _run_consistency_review(all_scenes: list) -> list:
 # ---------------------------------------------------------------------------
 
 async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
-    """Generate image + video prompts for all clips (two separate passes).
-
-    Returns a dict with 'scenes' list ready for YAML output.
-    """
+    """Generate image + video prompts for all clips (two separate passes)."""
     await client.init(timeout=300, watchdog_timeout=120)
+
+    # 1. Generate Character Profile
+    char_profile = await _generate_character_profile(script_text)
 
     segments = split_script_into_segments(script_text, clip_count)
     scene_tasks = [(i + 1, segments[i]) for i in range(clip_count)]
@@ -538,8 +641,8 @@ async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
     print(f"  Clip count : {clip_count}")
     print(f"  Batches    : {num_batches} × {BATCH_SIZE}")
     print(f"  Art style  : Big cartoon heads + stick-figure bodies")
-    print(f"  Pass 1     : Image prompts (scene composition + characters)")
-    print(f"  Pass 2     : Video prompts (motion only, no character description)")
+    print(f"  Pass 1     : Image prompts (Rich character description)")
+    print(f"  Pass 2     : Video prompts (Motion ONLY)")
 
     # --- Pass 1: Image prompts ---
     image_scenes_flat = []
@@ -547,30 +650,24 @@ async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
         start_i = batch_idx * BATCH_SIZE
         end_i = min(start_i + BATCH_SIZE, clip_count)
         batch = scene_tasks[start_i:end_i]
-        result = await _run_image_batch(batch, batch_idx, num_batches)
+        result = await _run_image_batch(batch, char_profile, batch_idx, num_batches)
         image_scenes_flat.extend(result)
 
-    image_scenes_map = {s["scene_number"]: s for s in image_scenes_flat}
-
-    # --- Pass 2: Video prompts (informed by image context) ---
+    # --- Pass 2: Video prompts ---
     video_scenes_flat = []
     for batch_idx in range(num_batches):
         start_i = batch_idx * BATCH_SIZE
         end_i = min(start_i + BATCH_SIZE, clip_count)
         batch = scene_tasks[start_i:end_i]
-        result = await _run_video_batch(batch, image_scenes_map, batch_idx, num_batches)
+        result = await _run_video_batch(batch, char_profile, batch_idx, num_batches)
         video_scenes_flat.extend(result)
 
     # --- Merge ---
     all_scenes = _merge_image_and_video(image_scenes_flat, video_scenes_flat)
 
-    # --- Consistency review (image prompts only) ---
-    if len(all_scenes) > 3:
-        all_scenes = await _run_consistency_review(all_scenes)
-
     final_data = {
         "art_style": "2D illustration — big cartoon heads, stick-figure bodies",
-        "animation_complexity": "moderate",
+        "character_profile": char_profile,
         "scenes": all_scenes,
     }
 
@@ -583,17 +680,15 @@ async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
 # ---------------------------------------------------------------------------
 
 async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
-    """Generate visual prompts driven by the audio chunks manifest.
-
-    Two-pass approach:
-      Pass 1 — Image prompts (scene composition, characters, environment)
-      Pass 2 — Video prompts (motion only, informed by image context)
-
-    Each chunk specifies: text, clips_needed, scene_numbers.
-    """
+    """Generate visual prompts driven by the audio chunks manifest."""
     await client.init(timeout=300, watchdog_timeout=120)
 
     chunks = manifest.get("chunks", [])
+    full_script = " ".join([c["text"] for c in chunks])
+    
+    # 1. Generate Character Profile
+    char_profile = await _generate_character_profile(full_script)
+
     total_clips = manifest.get("total_clips", sum(c["clips_needed"] for c in chunks))
 
     print(f"\n{'='*60}")
@@ -628,10 +723,8 @@ async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
         start_i = batch_idx * BATCH_SIZE
         end_i = min(start_i + BATCH_SIZE, len(scene_tasks))
         batch = scene_tasks[start_i:end_i]
-        result = await _run_image_batch(batch, batch_idx, num_batches)
+        result = await _run_image_batch(batch, char_profile, batch_idx, num_batches)
         image_scenes_flat.extend(result)
-
-    image_scenes_map = {s["scene_number"]: s for s in image_scenes_flat}
 
     # --- Pass 2: Video prompts ---
     video_scenes_flat = []
@@ -639,34 +732,22 @@ async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
         start_i = batch_idx * BATCH_SIZE
         end_i = min(start_i + BATCH_SIZE, len(scene_tasks))
         batch = scene_tasks[start_i:end_i]
-        result = await _run_video_batch(batch, image_scenes_map, batch_idx, num_batches)
+        result = await _run_video_batch(batch, char_profile, batch_idx, num_batches)
         video_scenes_flat.extend(result)
 
     # --- Merge ---
     all_scenes = _merge_image_and_video(image_scenes_flat, video_scenes_flat)
 
-    # --- Consistency review ---
-    if len(all_scenes) > 3:
-        all_scenes = await _run_consistency_review(all_scenes)
-
     final_data = {
         "art_style": "2D illustration — big cartoon heads, stick-figure bodies",
-        "animation_complexity": "moderate",
+        "character_profile": char_profile,
         "chunk_synced": True,
-        "chunk_mapping": [
-            {
-                "chunk_index": c["chunk_index"],
-                "audio_file": c["audio_file"],
-                "duration": c["duration"],
-                "scene_numbers": c["scene_numbers"],
-            }
-            for c in chunks
-        ],
         "scenes": all_scenes,
     }
 
     print(f"\n  ✅ Generated {len(all_scenes)} chunk-synced visual prompts")
     return final_data
+
 
 
 # ---------------------------------------------------------------------------
