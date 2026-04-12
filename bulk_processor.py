@@ -118,6 +118,29 @@ def process_video(video_path):
     print(f" Processing: {video_name}")
     print("="*80)
 
+    # --- Early Skip: Check if already cloned and present in final_clones/ ---
+    status = load_status()
+    video_status = status.get(video_name, {})
+    if video_status.get("steps", {}).get("bulk_process") == "completed":
+        final_spanish = video_status.get("assets", {}).get("final_spanish", "")
+        if final_spanish and Path(final_spanish).exists():
+            print(f"  [SKIPPING] Already cloned → {Path(final_spanish).name}")
+            return True
+    # Fallback: scan final_clones/ for a file whose stem matches the output dir's
+    # captioned or cloned video (handles cases where status.json was lost/reset)
+    if FINAL_DIR.exists():
+        captioned = output_dir / f"{video_stem}_captioned.mp4"
+        cloned = output_dir / f"{video_stem}_cloned.mp4"
+        # If either assembled video exists AND any mp4 is in final_clones, cross-check by mtime
+        for candidate in [captioned, cloned]:
+            if candidate.exists():
+                # Check if an identical-size file exists in final_clones/
+                candidate_size = candidate.stat().st_size
+                for fc in FINAL_DIR.glob("*.mp4"):
+                    if fc.stat().st_size == candidate_size:
+                        print(f"  [SKIPPING] Found matching clone in final_clones/ → {fc.name}")
+                        return True
+
     # --- Step 1: Transcription ---
     eng_script = output_dir / "english_script.txt"
     orig_audio = output_dir / "original_audio.wav"

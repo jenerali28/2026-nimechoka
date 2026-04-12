@@ -454,14 +454,10 @@ class TokenManager:
         for pool in self.pools.values():
             token = pool.get(raw_token)
             if token:
-                old_quota = token.quota
-                token.quota = 0
-                token.status = TokenStatus.COOLING
+                # Do NOT mark as COOLING on 429 — keep token active and let it retry
                 logger.warning(
-                    f"Token {raw_token[:10]}...: marked as rate limited "
-                    f"(quota {old_quota} -> 0, status -> cooling)"
+                    f"Token {raw_token[:10]}...: got 429 but keeping ACTIVE (rate limit bypass enabled)"
                 )
-                self._schedule_save()
                 return True
 
         logger.warning(f"Token {raw_token[:10]}...: not found for rate limit marking")

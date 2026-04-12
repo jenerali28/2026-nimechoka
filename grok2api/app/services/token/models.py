@@ -15,11 +15,11 @@ from datetime import datetime
 
 
 # 默认配额
-BASIC__DEFAULT_QUOTA = 80
-SUPER_DEFAULT_QUOTA = 140
+BASIC__DEFAULT_QUOTA = 999999999
+SUPER_DEFAULT_QUOTA = 999999999
 
-# 失败阈值
-FAIL_THRESHOLD = 5
+# 失败阈值 (set very high to prevent tokens from being marked expired)
+FAIL_THRESHOLD = 999999
 
 
 class TokenStatus(str, Enum):
@@ -95,10 +95,8 @@ class TokenInfo(BaseModel):
         # 注意：不在这里清零 fail_count，只有 record_success() 才清零
         # 这样可以避免失败后调用 consume 导致失败计数被重置
 
-        if self.quota == 0:
-            self.status = TokenStatus.COOLING
-        elif self.status == TokenStatus.COOLING:
-            # 只从 COOLING 恢复，不从 EXPIRED 恢复
+        # Never mark as COOLING due to quota — keep token active
+        if self.status == TokenStatus.COOLING:
             self.status = TokenStatus.ACTIVE
 
         return actual_cost
@@ -112,12 +110,8 @@ class TokenInfo(BaseModel):
         """
         self.quota = max(0, new_quota)
 
-        if self.quota == 0:
-            self.status = TokenStatus.COOLING
-        elif self.quota > 0 and self.status in [
-            TokenStatus.COOLING,
-            TokenStatus.EXPIRED,
-        ]:
+        # Never mark as COOLING — keep token active regardless of quota
+        if self.status in [TokenStatus.COOLING, TokenStatus.EXPIRED]:
             self.status = TokenStatus.ACTIVE
 
     def reset(self, default_quota: Optional[int] = None):
@@ -152,7 +146,8 @@ class TokenInfo(BaseModel):
             self.last_used_at = int(datetime.now().timestamp() * 1000)
 
         if self.quota == 0:
-            self.status = TokenStatus.COOLING
+            # Never mark as COOLING — keep token active
+            self.status = TokenStatus.ACTIVE
         else:
             self.status = TokenStatus.ACTIVE
 
