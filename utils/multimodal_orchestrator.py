@@ -61,10 +61,10 @@ else:
 
 STYLE_CONTEXT = {
     "visual_style": "2D Illustration",
-    "style_subcategory": "Big cartoon heads, stick-figure bodies",
+    "style_subcategory": "Wojak/rage comic faces on stick-figure bodies",
     "animation_complexity": "moderate",
     "color_palette": "vibrant digital colors",
-    "rendering_style": "flat digital ink, thick black outlines",
+    "rendering_style": "flat digital ink, thick black outlines, MS Paint aesthetic",
 }
 
 # ---------------------------------------------------------------------------
@@ -72,22 +72,27 @@ STYLE_CONTEXT = {
 # ---------------------------------------------------------------------------
 
 STYLE_ANCHOR = (
-    "crude minimalist cartoon in the style of early 2000s internet webcomics and MS Paint drawings, "
-    "stick-figure bodies with detached oversized cartoon faces, highly detailed expressive faces with "
-    "wrinkles and heavy eyelids on simple stick bodies, flat colors, simple black outlines, "
-    "lazy and unrefined drawing style, low detail backgrounds, meme-like aesthetic, "
-    "slightly off proportions, humorous vibe, cartoonish and amateurish look like old Newgrounds "
-    "or Something Awful comics"
+    "crude minimalist cartoon in the style of wojak and rage comics, "
+    "characters have bodies made of single thin black lines only — "
+    "one vertical line for torso, two diagonal lines for arms, two diagonal lines for legs, "
+    "NO body fill, NO clothing shape, NO torso shape, just bare black line segments, "
+    "detached oversized wojak-style face floating above the stick body, "
+    "face looks like a pale realistic human face drawn crudely — the classic 'feels guy' / wojak meme face, "
+    "simple sad or tired expression, prominent nose, heavy eyelids, "
+    "flat colors, thick black outlines, MS Paint aesthetic, "
+    "lazy unrefined drawing style, low detail backgrounds, meme-like dark humor vibe"
 )
 
 IMAGE_NEGATIVE = (
-    "photorealistic, 3D render, CGI, anime, chibi, realistic body proportions, muscular, "
-    "detailed hands, watermark, text overlay, subtitle, blurry, low quality, "
+    "photorealistic, 3D render, CGI, anime, chibi, realistic body, body shape, torso shape, "
+    "filled body, clothed body, muscular, detailed hands, body outline, silhouette body, "
+    "watermark, text overlay, subtitle, blurry, low quality, "
     "multiple panels, collage, grid layout, split screen, photo montage"
 )
 
 VIDEO_NEGATIVE = (
-    "photorealistic, 3D render, CGI, watermark, text, subtitle, blurry, low quality, "
+    "photorealistic, 3D render, CGI, realistic body, body shape, torso shape, filled body, "
+    "watermark, text, subtitle, blurry, low quality, "
     "multiple panels, split screen, collage, static image, same expression every scene"
 )
 
@@ -96,14 +101,20 @@ VIDEO_NEGATIVE = (
 # ---------------------------------------------------------------------------
 
 CHARACTER_PROFILE_PROMPT = """\
-You are a Character Designer for a crude minimalist cartoon series.
+You are a Character Designer for a crude minimalist cartoon series in the WOJAK / RAGE COMIC style.
 
 ART STYLE (mandatory for all characters):
-- Body: thin black stick figure — lines only, no muscle, no bulk
-- Head: OVERSIZED detached cartoon face (~40% of total figure height)
-- Face: highly detailed and expressive — wrinkles, prominent nose, heavy eyelids
-- Rendering: flat colors, thick black outlines, MS Paint / early 2000s webcomic aesthetic
-- Characters MUST be culturally authentic to the story's setting
+- Body: PURE STICK FIGURE — single thin black lines ONLY
+  * One vertical line = torso
+  * Two diagonal lines = arms (no hands, just line endpoints)
+  * Two diagonal lines = legs (no feet, just line endpoints)
+  * NO body fill, NO clothing shape on body, NO torso silhouette
+  * The body is literally just 5 black line segments
+- Head: OVERSIZED detached WOJAK-STYLE face (~40% of total figure height)
+- Face: the classic "feels guy" / wojak meme face — pale realistic-looking human face drawn crudely,
+  sad or tired expression, prominent realistic nose, heavy eyelids, simple shading
+- Rendering: flat colors, thick black outlines, MS Paint aesthetic
+- Characters MUST be culturally authentic to the story's setting (hair, clothing, skin tone)
 
 CULTURAL AUTHENTICITY RULES:
 - Ancient Egyptian: dark olive/brown skin, kohl-lined eyes, white linen shendyt or dress, gold jewelry, sandals
@@ -122,7 +133,7 @@ OUTPUT FORMAT — return ONLY this JSON:
       "name": "...",
       "role": "...",
       "cultural_context": "...",
-      "appearance_anchor": "thin black stick figure, [hair], detached [skin color] face, [1-2 key facial features], [clothing in 3-4 words]",
+      "appearance_anchor": "pure black line stick figure (5 lines only, no body fill), [hair], detached wojak-style [skin] face with sad heavy-lidded eyes, [clothing floating near body]",
       "visual_attributes": {{
         "skin_tone": "...",
         "hair": "...",
@@ -134,18 +145,14 @@ OUTPUT FORMAT — return ONLY this JSON:
   ]
 }}
 
-CRITICAL: The "appearance_anchor" field MUST be SHORT — maximum 20 words.
-Focus on the 3-4 most distinctive visual traits only.
+CRITICAL: The "appearance_anchor" field MUST be SHORT — maximum 25 words.
+ALWAYS start with "pure black line stick figure (5 lines only, no body fill)".
+ALWAYS include "wojak-style" and "sad heavy-lidded eyes".
 
-GOOD EXAMPLES (use this brevity):
-- "thin black stick figure, long wavy brown hair, detached white face with bored half-closed eyes, simple black tunic"
-- "thin black stick figure, shaved head, detached dark brown face with bulging eyes, dazzling gold tunic"
-- "small thin black stick figure, side-lock hair, detached light brown face with piercing eyes, white kilt and striped headdress"
-
-BAD EXAMPLE (too long, too detailed):
-- "a thin black stick figure with long wavy dark hair and a detached oversized olive-skinned face with heavy kohl-lined eyelids, visible teeth in a tense grimace, and a prominent nose, wearing an elegant sheer white linen kalasiris and a heavy gold usekh collar"
-
-Keep it punchy. The model will infer the rest from the style anchor.
+GOOD EXAMPLES:
+- "pure black line stick figure (5 lines only, no body fill), long wavy brown hair, detached wojak-style white face with sad heavy-lidded eyes, black tunic floating"
+- "pure black line stick figure (5 lines only, no body fill), shaved head, detached wojak-style dark brown face with sad heavy-lidded eyes, gold robe floating"
+- "pure black line stick figure (5 lines only, no body fill), side-lock hair, detached wojak-style olive face with sad heavy-lidded eyes, white kilt floating"
 """
 
 # ---------------------------------------------------------------------------
@@ -166,14 +173,15 @@ RULES:
 1. Each prompt is a single paragraph of natural language — NOT a JSON object, NOT bullet points.
 2. Start every prompt with the style anchor words, then describe the scene.
 3. Include the character's full appearance anchor phrase every time they appear.
-4. Describe the environment in detail: setting, time of day, weather, colors, background elements.
-5. Describe what the character is doing and their expression — match the script moment.
-6. Vary expressions scene to scene — do NOT default to angry/intense unless the script calls for it.
-7. End every prompt with the negative list: "negative: {negative}"
-8. ONE single scene per prompt — no collage, no split screen, no multiple panels.
+4. ALWAYS describe character faces as "wojak-style [skin color] face with sad heavy-lidded eyes" — this is the core style.
+5. Describe the environment in detail: setting, time of day, weather, colors, background elements.
+6. Describe what the character is doing and their expression — match the script moment.
+7. Vary expressions scene to scene — do NOT default to angry/intense unless the script calls for it.
+8. End every prompt with the negative list: "negative: {negative}"
+9. ONE single scene per prompt — no collage, no split screen, no multiple panels.
 
 EXAMPLE of a good prompt (use this quality and style):
-"A crude minimalist cartoon in the style of early 2000s internet webcomics and MS Paint drawings, snowy forest scene, tall brown tree trunks with green foliage in the background, light blue snow on the ground. In the foreground: a tall thin black stick figure with long wavy brown hair and a detached white face with a bored half-closed eyes expression, standing and holding a curved brown branch. To the right, a small stick figure with messy brown hair and a wide grin is sitting in the snow holding a leash attached to a solid black goat with horns. Green bushes poking through the snow. Simple black outlines, flat colors, lazy unrefined drawing style, meme-like aesthetic, slightly off proportions, humorous dark humor vibe. negative: photorealistic, 3D render, CGI, anime, realistic body, watermark, text, blurry, collage, split screen"
+"A crude minimalist cartoon in the wojak and rage comic style, snowy forest scene, tall brown tree trunks with green foliage, light blue snow on the ground. In the foreground: a character whose body is literally 5 black lines — one vertical line for torso, two diagonal lines for arms, two diagonal lines for legs, no body fill whatsoever — with long wavy brown hair and a detached oversized wojak-style white face with sad heavy-lidded eyes floating above the line body, standing and holding a curved brown branch. To the right, another pure black line stick figure with messy brown hair and a detached wojak-style face sitting in the snow holding a leash attached to a solid black goat. Simple thick black outlines, flat colors, MS Paint aesthetic, meme-like dark humor vibe. negative: photorealistic, 3D render, CGI, anime, realistic body, body shape, torso shape, filled body, watermark, text, blurry, collage, split screen"
 
 OUTPUT FORMAT — a JSON object with a "scenes" array:
 {{
@@ -208,9 +216,9 @@ CHARACTER APPEARANCES (use these exact descriptions — appearance is LOCKED acr
 RULES:
 1. Each prompt is a single paragraph of natural language — NOT JSON, NOT bullet points.
 2. Start with the style anchor, then describe the scene and characters (using their appearance anchors).
-3. Character appearance must be NEUTRAL — describe what they look like, not their emotional state.
+3. Character body MUST be described as pure black lines — "body made of 5 black lines (torso + 2 arms + 2 legs), no body fill".
    WRONG: "the terrified protagonist with wide fearful eyes"
-   RIGHT: "the protagonist — tall thin black stick figure with dark messy hair and a detached tan face"
+   RIGHT: "the protagonist — body made of 5 black lines (no fill), dark messy hair, detached wojak-style tan face with sad heavy-lidded eyes"
 4. After describing the scene, add motion: what physically moves during the 6 seconds.
    Use this format: "[0s-2s] action. [2s-4s] action. [4s-6s] action."
 5. Include camera motion: static, slow push-in, pan left/right, slight zoom.
@@ -219,7 +227,7 @@ RULES:
 8. ONE continuous clip — no collage, no split screen.
 
 EXAMPLE of a good video prompt:
-"A crude minimalist cartoon in the style of early 2000s internet webcomics, dusty ancient Egyptian courtyard, sandy brown floor with flat coloring, mud-brick walls in the background with simple rectangular brick pattern. The protagonist — a tall thin black stick figure with dark messy hair and a detached tan face — stands in the center holding a broom. [0s-2s] Protagonist sweeps broom left to right, small dust clouds puff up from the floor. [2s-4s] Protagonist slows down, stick shoulders slump slightly, dust drifts upward. [4s-6s] Protagonist stops sweeping and leans on the broom handle, dust settles. Camera static medium shot throughout. Simple black outlines, flat colors, MS Paint aesthetic. negative: photorealistic, 3D render, CGI, watermark, text, blurry, collage, split screen, same expression every scene"
+"A crude minimalist cartoon in the wojak and rage comic style, dusty ancient Egyptian courtyard, sandy brown floor, mud-brick walls in the background. The protagonist — body made of 5 black lines (one vertical torso line, two arm lines, two leg lines, no body fill) — with dark messy hair and a detached oversized wojak-style tan face with sad heavy-lidded eyes, stands holding a broom. [0s-2s] The line-body protagonist sweeps broom left to right, dust clouds puff up. [2s-4s] Stick arms slump, dust drifts upward. [4s-6s] Protagonist leans on broom handle, dust settles. Camera static medium shot. Simple thick black outlines, flat colors, MS Paint aesthetic. negative: photorealistic, 3D render, CGI, realistic body, body shape, torso shape, filled body, watermark, text, blurry, collage, split screen, same expression every scene"
 
 OUTPUT FORMAT — a JSON object with a "scenes" array:
 {{
@@ -286,8 +294,8 @@ def _build_character_anchors(char_profile: dict) -> str:
     characters = char_profile.get("characters", [])
     if not characters:
         return (
-            "Main character: a tall thin black stick figure with an oversized detached cartoon face, "
-            "flat colors, thick black outlines"
+            "Main character: pure black line stick figure (5 lines only — torso + 2 arms + 2 legs, no body fill), "
+            "detached oversized wojak-style face with sad heavy-lidded eyes, flat colors, thick black outlines"
         )
     lines = []
     for c in characters:
@@ -296,12 +304,12 @@ def _build_character_anchors(char_profile: dict) -> str:
         if not anchor:
             # Build from visual_attributes if appearance_anchor missing
             attrs = c.get("visual_attributes", {})
-            skin = attrs.get("skin_tone", "white")
+            skin = attrs.get("skin_tone", "pale")
             hair = attrs.get("hair", "dark hair")
             clothing = attrs.get("clothing", "simple clothing")
             anchor = (
-                f"a tall thin black stick figure with {hair} and a detached {skin} face "
-                f"with expressive eyes, wearing {clothing}"
+                f"pure black line stick figure (5 lines only, no body fill), {hair}, "
+                f"detached wojak-style {skin} face with sad heavy-lidded eyes, {clothing} floating"
             )
         lines.append(f"{name}: {anchor}")
     return "\n".join(lines)

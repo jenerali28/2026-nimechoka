@@ -82,6 +82,8 @@ def ensure_character_anchors_in_prompt(
     appears in the prompt.  If the character name is already present, replace
     the bare name with "Name (anchor)".  If the name is absent, append a
     character description line at the end.
+    
+    The anchor should already contain "wojak-style" from the character profile.
     """
     for name in characters_in_scene:
         anchor = character_anchors.get(name, '')
@@ -108,7 +110,8 @@ def ensure_location_in_prompt(prompt: str, location: str) -> str:
     """
     Make sure the location is explicitly stated in the prompt.
     If it's already there (case-insensitive), do nothing.
-    Otherwise prepend a short location clause.
+    Otherwise append a short location clause at the END (never prepend —
+    the style anchor must always lead the prompt).
     """
     if not location or location in ('unknown location', 'unknown', ''):
         return prompt
@@ -154,7 +157,8 @@ def ensure_location_in_prompt(prompt: str, location: str) -> str:
     }
 
     label = location_labels.get(location.lower(), location)
-    return f"Setting: {label}. {prompt}"
+    # Append location at the end so the style anchor stays at the front
+    return prompt.rstrip('. ') + f". Scene set in {label}."
 
 
 def ensure_tone_style_in_prompt(prompt: str, tone: str) -> str:

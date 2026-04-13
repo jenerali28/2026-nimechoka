@@ -46,9 +46,10 @@ MAX_RETRIES = 3
 # Base style rules to be adapted by the character profile
 CHARACTER_BASE_STYLE = """\
 BASE ART STYLE (mandatory):
-- Characters have an OVERSIZED cartoon head (~40% of total figure height).
-- Face is HIGHLY DETAILED and expressive: wrinkles, prominent nose, heavy eyelids, 
-  realistic skin texture — drawn with thick black outlines.
+- Characters have an OVERSIZED WOJAK-STYLE face (~40% of total figure height).
+- Face is the classic "feels guy" / wojak meme face: pale realistic-looking human face drawn crudely,
+  sad or tired expression, prominent realistic nose, heavy eyelids, simple shading.
+  Thick black outlines on the face.
 - Body is a STICK FIGURE: thin black lines for arms, legs, and torso. No muscle, no bulk.
 - Flat digital coloring. Hard black outlines on everything.
 - Characters ADAPT appearance to the story's cultural context (clothing, skin tone, hair).
@@ -146,7 +147,7 @@ OUTPUT FORMAT — produce a JSON object with a "scenes" array. Each scene:
       "resolution_estimation": "1280x720"
     }},
     "global_context": {{
-      "scene_description": "A high-detail 2D digital illustration depicting [specific action] in [specific environment], featuring [character name(s)] with oversized cartoon heads and stick-figure bodies, flat digital coloring, thick black outlines.",
+      "scene_description": "A high-detail 2D digital illustration in the wojak/rage comic style depicting [specific action] in [specific environment], featuring [character name(s)] with oversized wojak-style faces and stick-figure bodies, flat digital coloring, thick black outlines.",
       "time_of_day": "...",
       "weather_atmosphere": "...",
       "lighting": {{
@@ -183,8 +184,8 @@ OUTPUT FORMAT — produce a JSON object with a "scenes" array. Each scene:
         }},
         "micro_details": [
           "Stick-figure limbs drawn with thick black lines, no muscle",
-          "Oversized cartoon head (~40% of total figure height)",
-          "Highly detailed face: [copy exact face details from character profile]",
+          "Oversized wojak-style face (~40% of total figure height)",
+          "Wojak/feels-guy face: pale realistic-looking human face drawn crudely, sad heavy-lidded eyes, prominent nose",
           "Wearing: [copy exact clothing from character profile]",
           "[Emotion matching this specific script moment — e.g. 'wide curious eyes', 'slight smirk']",
           "[Pose detail — e.g. 'right stick-arm raised, pointing forward']"
@@ -285,7 +286,7 @@ OUTPUT FORMAT — produce a JSON object with a "scenes" array. Each scene:
   "video_prompt": {{
     "meta": {{
       "clip_duration": "6s",
-      "style": "2D animation, flat illustration, stick-figure characters with oversized cartoon heads, digital ink"
+      "style": "2D animation, flat illustration, wojak/rage comic style — stick-figure characters with oversized wojak-style faces, digital ink"
     }},
     "global_context": {{
       "scene_description": "A 2D animation clip of [specific action] in [specific environment]. [Brief motion summary].",
@@ -422,7 +423,7 @@ def _make_placeholder_image_prompt(seg_text: str) -> dict:
         "composition": {"camera_angle": "Eye-level", "framing": "Medium shot", "depth_of_field": "Deep", "focal_point": "Main character"},
         "objects": [{"id": "obj_001", "label": "Main Character", "category": "Person/Character", "location": "Center", "prominence": "Foreground",
                      "visual_attributes": {"color": "Varied", "texture": "Smooth/Digital", "material": "Digital ink", "state": "Undamaged", "dimensions_relative": "Large"},
-                     "micro_details": ["Oversized cartoon head", "Stick-figure body", "Thick black outlines"], "pose_or_orientation": "Standing, facing forward", "text_content": None}],
+                     "micro_details": ["Oversized wojak-style face", "Stick-figure body", "Thick black outlines"], "pose_or_orientation": "Standing, facing forward", "text_content": None}],
         "text_ocr": {"present": False, "content": None},
         "semantic_relationships": ["Main character is standing in the scene"],
     }
@@ -430,7 +431,7 @@ def _make_placeholder_image_prompt(seg_text: str) -> dict:
 
 def _make_placeholder_video_prompt(scene_num: int) -> dict:
     return {
-        "meta": {"clip_duration": "6s", "style": "2D animation, flat illustration, stick-figure characters with oversized cartoon heads"},
+        "meta": {"clip_duration": "6s", "style": "2D animation, flat illustration, wojak/rage comic style — stick-figure characters with oversized wojak-style faces"},
         "global_context": {
             "scene_description": f"Scene {scene_num}: character stands in environment",
             "time_of_day": "Daytime", "weather_atmosphere": "Clear",
@@ -666,7 +667,7 @@ async def generate_visual_prompts(script_text: str, clip_count: int) -> dict:
     all_scenes = _merge_image_and_video(image_scenes_flat, video_scenes_flat)
 
     final_data = {
-        "art_style": "2D illustration — big cartoon heads, stick-figure bodies",
+        "art_style": "2D illustration — wojak/rage comic faces on stick-figure bodies",
         "character_profile": char_profile,
         "scenes": all_scenes,
     }
@@ -739,7 +740,7 @@ async def generate_visual_prompts_from_manifest(manifest: dict) -> dict:
     all_scenes = _merge_image_and_video(image_scenes_flat, video_scenes_flat)
 
     final_data = {
-        "art_style": "2D illustration — big cartoon heads, stick-figure bodies",
+        "art_style": "2D illustration — wojak/rage comic faces on stick-figure bodies",
         "character_profile": char_profile,
         "chunk_synced": True,
         "scenes": all_scenes,
