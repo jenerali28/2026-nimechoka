@@ -130,7 +130,7 @@ def process_video(video_path):
     # captioned or cloned video (handles cases where status.json was lost/reset)
     if FINAL_DIR.exists():
         captioned = output_dir / f"{video_stem}_captioned.mp4"
-        cloned = output_dir / f"{video_stem}_cloned.mp4"
+        cloned = output_dir / video_name  # original filename
         # If either assembled video exists AND any mp4 is in final_clones, cross-check by mtime
         for candidate in [captioned, cloned]:
             if candidate.exists():
@@ -255,7 +255,7 @@ def process_video(video_path):
                             assets={"clips_dir": str(clips_dir)})
 
     # --- Step 7: Final Assembly (Native Speed — no stretching) ---
-    final_video = output_dir / f"{video_stem}_cloned.mp4"
+    final_video = output_dir / video_name  # keep original filename
     assembly_cmd = [
         PYTHON, str(UTILS_DIR / "combine_all.py"),
         "--clips-dir", str(clips_dir),
@@ -308,20 +308,17 @@ def process_video(video_path):
     with open(meta_json, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    # --- Step 9: Spanish Rename + Copy to final_clones/ ---
+    # --- Step 9: Copy to final_clones/ keeping original filename ---
     # Export the captioned version (or fall back to uncaptioned)
     export_video = captioned_video if captioned_video.exists() else final_video
-    spanish_title = translate_single_title(video_stem)
-    safe_name = sanitize_filename(spanish_title)
     FINAL_DIR.mkdir(parents=True, exist_ok=True)
-    dest_path = FINAL_DIR / f"{safe_name}.mp4"
-    
+    dest_path = FINAL_DIR / video_name  # keep original filename
+
     if export_video.exists():
         shutil.copy2(str(export_video), str(dest_path))
-        print(f"  ✅ Exported: {safe_name}.mp4")
-        update_video_status(video_name, "bulk_process", "completed", 
-                           assets={"metadata_json": str(meta_json), "final_spanish": str(dest_path)},
-                           metadata={"spanish_title": spanish_title})
+        print(f"  ✅ Exported: {video_name}")
+        update_video_status(video_name, "bulk_process", "completed",
+                           assets={"metadata_json": str(meta_json), "final_spanish": str(dest_path)})
 
         # --- Step 10: Cleanup intermediate files (DISABLED for testing) ---
         # if dest_path.exists():
